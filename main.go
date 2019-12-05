@@ -35,6 +35,7 @@ func newRoot(cmdName string) *cobra.Command {
 	cmd.AddCommand(newAdhoc())
 	cmd.AddCommand(newWeb())
 	cmd.AddCommand(newDumper())
+	cmd.AddCommand(newBatch())
 
 	return cmd
 }
@@ -87,24 +88,6 @@ func newStart() *cobra.Command {
 	return cmd
 }
 
-// Return a new update key command.
-func newUpdate() *cobra.Command {
-	var cluster *[]string
-
-	cmd := &cobra.Command{
-		Use:   "update <key> <value>",
-		Short: "Insert or update a key in the demo table.",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbUpdate(args[0], args[1], *cluster)
-		},
-	}
-	flags := cmd.Flags()
-	cluster = flags.StringSliceP("cluster", "c", defaultCluster, "addresses of existing cluster nodes")
-
-	return cmd
-}
-
 // Return a cluster nodes command.
 func newCluster() *cobra.Command {
 	cmd := &cobra.Command{
@@ -145,36 +128,65 @@ func newAdd() *cobra.Command {
 
 // Return a new update key command.
 func newAdhoc() *cobra.Command {
-	var cluster *[]string
+	var cluster []string
+	var dbName string
 
 	cmd := &cobra.Command{
 		Use:   "adhoc <statment>...",
 		Short: "execute a statement against the demo database.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbExec(defaultDatabase, *cluster, args...)
+			return dbExec(dbName, cluster, args...)
 		},
 	}
 	flags := cmd.Flags()
-	cluster = flags.StringSliceP("cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
 	return cmd
 }
 
 // Return a new dump command.
 func newDumper() *cobra.Command {
-	var cluster *[]string
+	var cluster []string
+	var dbName string
 
 	cmd := &cobra.Command{
 		Use:   "dump database",
 		Short: "dump the Database and its associated WAL file.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbDump(args[0], defaultDatabase, *cluster)
+			return dbDump(args[0], dbName, cluster)
 		},
 	}
 	flags := cmd.Flags()
-	cluster = flags.StringSliceP("cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+
+	return cmd
+}
+
+// execute a batch of commands
+func newBatch() *cobra.Command {
+	var cluster []string
+	var dbName string
+	var fileName string
+	var echo bool
+
+	cmd := &cobra.Command{
+		Use:   "batch",
+		Short: "Execute the statements in a file.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			batchCommand(echo, fileName, dbName, cluster)
+			return nil
+		},
+	}
+
+	flags := cmd.Flags()
+	flags.BoolVarP(&echo, "echo", "e", false, "echo batch commands during execution")
+	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
+	flags.StringVarP(&fileName, "file", "f", "", "name of file to load")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
 	return cmd
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,59 @@ import (
 	"github.com/canonical/go-dqlite/driver"
 	"github.com/pkg/errors"
 )
+
+func query(db *sql.DB, w io.Writer, statement string, args ...interface{}) error {
+	rows, err := db.Query(statement)
+	if err != nil {
+		return errors.Wrap(err, "query failed")
+	}
+	defer rows.Close()
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
+
+	columns, _ := rows.Columns()
+	buffer := make([]string, len(columns))
+	scanTo := make([]interface{}, len(columns))
+	for i := range buffer {
+		scanTo[i] = &buffer[i]
+	}
+
+	// print header
+	for _, column := range columns {
+		fmt.Fprint(tw, column)
+		fmt.Fprint(tw, "\t")
+	}
+	fmt.Fprintln(tw)
+	for _, column := range columns {
+		fmt.Fprint(tw, strings.Repeat("-", len(column)))
+		fmt.Fprint(tw, "\t")
+	}
+	fmt.Fprintln(tw)
+
+	for rows.Next() {
+		if err := rows.Scan(scanTo...); err != nil {
+			tw.Flush()
+			return errors.Wrap(err, "failed to scan row")
+		}
+		for _, column := range buffer {
+			fmt.Fprint(tw, column)
+			fmt.Fprint(tw, "\t")
+		}
+		fmt.Fprintln(tw)
+	}
+	tw.Flush()
+	return nil
+}
+
+func getDB(dbName string, cluster []string) (*sql.DB, error) {
+	store := getStore(cluster)
+	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create dqlite driver")
+	}
+	sql.Register("dqlite", driver)
+
+	return sql.Open("dqlite", dbName)
+}
 
 // all purpose wrapper (for now) TODO: rethink this
 func dbExec(dbname string, cluster []string, statements ...string) error {
@@ -79,61 +133,6 @@ func dbExec(dbname string, cluster []string, statements ...string) error {
 		}
 
 	}
-	return nil
-}
-
-func dbQuery(key string, cluster []string) error {
-	store := getStore(cluster)
-	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
-	if err != nil {
-		return errors.Wrapf(err, "failed to create dqlite driver")
-	}
-	sql.Register("dqlite", driver)
-
-	db, err := sql.Open("dqlite", "demo.db")
-	if err != nil {
-		return errors.Wrap(err, "can't open demo database")
-	}
-	defer db.Close()
-
-	if _, err := db.Exec("CREATE TABLE IF NOT EXISTS model (key TEXT, value TEXT)"); err != nil {
-		return errors.Wrap(err, "can't create demo table")
-	}
-
-	row := db.QueryRow("SELECT value FROM model WHERE key = ?", key)
-	value := ""
-	if err := row.Scan(&value); err != nil {
-		return errors.Wrap(err, "failed to get key")
-	}
-	fmt.Println(value)
-
-	return nil
-}
-
-func dbUpdate(key, value string, cluster []string) error {
-	store := getStore(cluster)
-	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
-	if err != nil {
-		return errors.Wrapf(err, "failed to create dqlite driver")
-	}
-	sql.Register("dqlite", driver)
-
-	db, err := sql.Open("dqlite", "demo.db")
-	if err != nil {
-		return errors.Wrap(err, "can't open demo database")
-	}
-	defer db.Close()
-
-	if _, err := db.Exec("CREATE TABLE IF NOT EXISTS model (key TEXT, value TEXT)"); err != nil {
-		return errors.Wrap(err, "can't create demo table")
-	}
-
-	if _, err := db.Exec("INSERT OR REPLACE INTO model(key, value) VALUES(?, ?)", key, value); err != nil {
-		return errors.Wrap(err, "can't update key")
-	}
-
-	fmt.Println("done")
-
 	return nil
 }
 

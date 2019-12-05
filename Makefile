@@ -1,6 +1,9 @@
-.PHONY: docker run
+.PHONY: docker run build
 
 MNT = /root/go/src/github.com/paulstuart/dqlited 
+
+build:
+	go build -tags libsqlite3
 
 docker:
 	docker build -t paulstuart/xenial-dqlite:latest .
