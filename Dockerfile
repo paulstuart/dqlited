@@ -37,19 +37,16 @@ RUN apt-get install -y 	\
 	vim 
 
 RUN mkdir -p ~/go/bin ~/go/pkg ~/go/src
-RUN mkdir -p /root/go/src/github.com/paulstuart #/unitlite
+RUN mkdir -p /root/go/src/github.com/paulstuart
 
 # host version uses ssh, but we don't want that inside docker container
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
 
 RUN echo hey
 # get dependencies (TODO: rethink this after evaluating)
-#RUN cd /root/go/src/github.com/paulstuart/unitlite/src && go get -u -v
 RUN cd /root/go/src/github.com/paulstuart && git clone https://github.com/paulstuart/unitlite.git
 
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-RUN cd /root/go/src/github.com/paulstuart/unitlite/dqtest && go get -u -v ./...
-#RUN cd /root/go/src/github.com/paulstuart/unitlite && ls -lR
-
+RUN cd /root/go/src/github.com/paulstuart/dqlited && go get -u -v ./...
 
