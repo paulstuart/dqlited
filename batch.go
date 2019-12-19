@@ -16,7 +16,6 @@ import (
 var (
 	commentC   = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	commentSQL = regexp.MustCompile(`\s*--.*`)
-	readline   = regexp.MustCompile(`(\.[a-z]+( .*)*)`)
 )
 
 func startsWith(data, sub string) bool {

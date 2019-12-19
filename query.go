@@ -25,7 +25,7 @@ func query(db *sql.DB, w io.Writer, statement string, args ...interface{}) error
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
 
 	columns, _ := rows.Columns()
-	buffer := make([]string, len(columns))
+	buffer := make([]interface{}, len(columns))
 	scanTo := make([]interface{}, len(columns))
 	for i := range buffer {
 		scanTo[i] = &buffer[i]
@@ -84,49 +84,15 @@ func dbExec(dbname string, cluster []string, statements ...string) error {
 	}
 	defer db.Close()
 
+	if len(statements) == 0 {
+		return fmt.Errorf("no statements given")
+	}
 	for i, statement := range statements {
 		action := strings.ToUpper(strings.Fields(statement)[0])
 		if action == "SELECT" || action == "PRAGMA" {
-			rows, err := db.Query(statement)
-			if err != nil {
-				return errors.Wrap(err, "query failed")
+			if err = query(db, os.Stdout, statement); err != nil {
+				return err
 			}
-			defer rows.Close()
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
-
-			columns, _ := rows.Columns()
-			//buffer := make([]interface{}, len(columns))
-			buffer := make([]string, len(columns))
-			scanTo := make([]interface{}, len(columns))
-			for i := range buffer {
-				scanTo[i] = &buffer[i]
-			}
-
-			// print header
-			for _, column := range columns {
-				fmt.Fprint(w, column)
-				fmt.Fprint(w, "\t")
-			}
-			fmt.Fprintln(w)
-			for _, column := range columns {
-				fmt.Fprint(w, strings.Repeat("-", len(column)))
-				fmt.Fprint(w, "\t")
-			}
-			fmt.Fprintln(w)
-
-			for rows.Next() {
-				if err := rows.Scan(scanTo...); err != nil {
-					w.Flush()
-					return errors.Wrap(err, "failed to scan row")
-				}
-				for _, column := range buffer {
-					fmt.Fprint(w, column)
-					fmt.Fprint(w, "\t")
-				}
-				fmt.Fprintln(w)
-			}
-			w.Flush()
-			continue
 		}
 		if _, err := db.Exec(statement); err != nil {
 			return errors.Wrapf(err, "dbExec fail %d/%d", i+1, len(statements))
@@ -137,7 +103,6 @@ func dbExec(dbname string, cluster []string, statements ...string) error {
 }
 
 type Queryor interface {
-	//QueryDB(queries ...string) ([][]string, error)
 	QueryDB(queries string, args ...interface{}) ([]Rows, error)
 	Close() error
 }
@@ -210,49 +175,6 @@ func (d *dbx) QueryDB(query string, args ...interface{}) ([]Rows, error) {
 	return reply, nil
 }
 
-/*
-// Rows represents the outcome of an operation that returns query data.
-type Rows struct {
-	Columns []string        `json:"columns,omitempty"`
-	Types   []string        `json:"types,omitempty"`
-	Values  [][]interface{} `json:"values,omitempty"`
-	Error   string          `json:"error,omitempty"`
-	Time    float64         `json:"time,omitempty"`
-}
-func (d *dbx) QueryDB(queries ...string) (*Rows, error) {
-	var resp Rows
-	reply := make([][]string, 0, 32)
-	for _, statement := range queries {
-		action := strings.ToUpper(strings.Fields(statement)[0])
-		if action != "SELECT" {
-			return nil, fmt.Errorf("Invalid action: %q -- must use SELECT", action)
-		}
-		rows, err := d.db.Query(statement)
-		if err != nil {
-			return nil, errors.Wrap(err, "query failed")
-		}
-		defer rows.Close()
-		columns, _ := rows.Columns()
-		for rows.Next() {
-			if len(reply) == 0 {
-				reply = append(reply, columns)
-			}
-			buffer := make([]string, len(columns))
-			scanTo := make([]interface{}, len(columns))
-			for i := range buffer {
-				scanTo[i] = &buffer[i]
-			}
-			if err := rows.Scan(scanTo...); err != nil {
-				return nil, errors.Wrap(err, "failed to scan row")
-			}
-			reply = append(reply, buffer)
-		}
-
-	}
-	return reply, nil
-}
-*/
-
 type Result struct {
 	LastInsertID int64   `json:"last_insert_id,omitempty"`
 	RowsAffected int64   `json:"rows_affected,omitempty"`
@@ -270,18 +192,8 @@ type Rows struct {
 }
 
 type ExecuteResponse struct {
-	Results []Result     `json:"results,omitempty"`
-	Time    float64      `json:"time,omitempty"`
-	Raft    RaftResponse `json:"raft,omitempty"`
-}
-
-// TODO: this is the generic response for rqlite
-// make it work for now but shape to make our own
-type OldResponse struct {
-	Results interface{} `json:"results,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Time    float64     `json:"time,omitempty"`
-	// contains filtered or unexported fields
+	Results []Result `json:"results,omitempty"`
+	Time    float64  `json:"time,omitempty"`
 }
 
 type Executor interface {
@@ -310,15 +222,12 @@ func (d *dbx) Execute(statements ...string) (*ExecuteResponse, error) {
 }
 
 func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
-	pretty, _ := isPretty(r)
-
 	enc := json.NewEncoder(w)
-	if pretty {
+	if pretty, _ := isPretty(r); pretty {
 		enc.SetIndent("", "    ")
 	}
 
-	err := enc.Encode(j)
-	if err != nil {
+	if err := enc.Encode(j); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

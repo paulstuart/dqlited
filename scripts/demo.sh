@@ -1,23 +1,13 @@
 #!/bin/bash
 
-# start in parent directory
-cd $(dirname $0)/..
-export PATH=$PWD:$PATH
+cd $(dirname $0)
 
-# start fresh
-rm -rf /tmp/dqlite*
+pkill dqlited
 
-# fail at first error
-set -e
+./start.sh 	# start 3 (required) servers
 
-CMD=dqlited
+sleep 1		# let it warm up
 
-$CMD start 1 > /tmp/dqlited-demo1.txt 2>&1 &
-#sleep 1
-$CMD start 2 > /tmp/dqlited-demo2.txt 2>&1 &
-#sleep 1
-$CMD start 3 > /tmp/dqlited-demo3.txt 2>&1 &
-#sleep 1
-$CMD add 2
-#sleep 1
-$CMD add 3
+./prep.sh 	# add some schemas/data
+
+./start.sh 4 5 	# start extra servers for failover testing

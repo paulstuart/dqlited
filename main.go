@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -36,6 +37,7 @@ func newRoot(cmdName string) *cobra.Command {
 	cmd.AddCommand(newWeb())
 	cmd.AddCommand(newDumper())
 	cmd.AddCommand(newBatch())
+	cmd.AddCommand(newSeeker())
 
 	return cmd
 }
@@ -50,7 +52,7 @@ func newWeb() *cobra.Command {
 		Use:   "webserver",
 		Short: "Start a web server.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			WebServer(port, defaultDatabase, cluster)
+			WebServer(port, dbName, cluster)
 			return nil
 		},
 	}
@@ -67,6 +69,8 @@ func newWeb() *cobra.Command {
 func newStart() *cobra.Command {
 	var dir string
 	var address string
+	var dbName string
+	var cluster []string
 
 	cmd := &cobra.Command{
 		Use:   "start <id>",
@@ -77,34 +81,42 @@ func newStart() *cobra.Command {
 			if err != nil {
 				return errors.Wrapf(err, "%s is not a number", args[0])
 			}
-			return dbStart(id, dir, address)
+			return dbStart(id, dir, address, dbName, cluster...)
 		},
 	}
 
 	flags := cmd.Flags()
-	flags.StringVarP(&dir, "dir", "d", "/tmp/dqlited", "base demo directory")
+	flags.StringVarP(&dir, "dir", "l", "/tmp/dqlited", "database working directory")
+	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
 	flags.StringVarP(&address, "address", "a", "", "address of the node (default is 127.0.0.1:918<ID>)")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
 	return cmd
 }
 
 // Return a cluster nodes command.
 func newCluster() *cobra.Command {
+	var address string
+	var cluster []string
+
 	cmd := &cobra.Command{
 		Use:   "cluster",
 		Short: "display cluster nodes.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return clusterShow()
+			return clusterShow(address, cluster...)
 		},
 	}
+	flags := cmd.Flags()
+	flags.StringVarP(&address, "address", "a", "", "address of the node to add (default is 127.0.0.1:918<ID>)")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 	return cmd
 }
 
 // Return a new add command.
 func newAdd() *cobra.Command {
 	var address string
-	var cluster *[]string
+	var cluster []string
 
 	cmd := &cobra.Command{
 		Use:   "add <id>",
@@ -115,13 +127,13 @@ func newAdd() *cobra.Command {
 			if err != nil {
 				return errors.Wrapf(err, "%s is not a number", args[0])
 			}
-			return clusterAdd(id, address, *cluster)
+			return clusterAdd(id, address, cluster)
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.StringVarP(&address, "address", "a", "", "address of the node to add (default is 127.0.0.1:918<ID>)")
-	cluster = flags.StringSliceP("cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
 	return cmd
 }
@@ -136,7 +148,7 @@ func newAdhoc() *cobra.Command {
 		Short: "execute a statement against the demo database.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbExec(dbName, cluster, args...)
+			return dbExec(dbName, cluster, strings.Join(args, " "))
 		},
 	}
 	flags := cmd.Flags()
@@ -186,6 +198,25 @@ func newBatch() *cobra.Command {
 	flags.BoolVarP(&echo, "echo", "e", false, "echo batch commands during execution")
 	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
 	flags.StringVarP(&fileName, "file", "f", "", "name of file to load")
+	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+
+	return cmd
+}
+
+// execute a poller that shows current leader
+func newSeeker() *cobra.Command {
+	var cluster []string
+
+	cmd := &cobra.Command{
+		Use:   "seeker",
+		Short: "Continuously poll for active leader.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			seeker(cluster...)
+			return nil
+		},
+	}
+
+	flags := cmd.Flags()
 	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
 	return cmd

@@ -1,0 +1,77 @@
+
+#
+# create an image for building dqlite from scratch
+# it builds upon the reference dqlite image to allow to stare and compare
+#
+
+ARG release=xenial
+
+FROM paulstuart/dqlite-base:${release}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update
+
+RUN apt-get install -y 	\
+	autoconf 	\
+	automake 	\
+	curl		\
+	gcc		\
+	git 		\
+	libtool 	\
+	make 		\
+	man 		\
+	man-db		\
+	manpages 	\
+	net-tools	\
+	pkg-config 	\
+	strace		\
+	tcl-dev		\
+	vim 
+
+# set up Go
+RUN cd /usr/local && \
+	curl -kL https://dl.google.com/go/go1.13.4.linux-amd64.tar.gz | tar -xzf -
+
+RUN echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+
+RUN mkdir -p ~/go/bin ~/go/pkg ~/go/src
+
+# our build area
+
+RUN mkdir /opt/build
+WORKDIR /opt/build
+
+# gather all the sources required to build dqlite
+# note that the repos will need to be updated after this image is built
+
+RUN git clone https://github.com/canonical/dqlite.git 			&& \
+    git clone --depth 100 https://github.com/canonical/sqlite.git 	&& \
+    git clone https://github.com/canonical/libco.git 			&& \
+    git clone https://github.com/libuv/libuv.git 			&& \
+    git clone https://github.com/canonical/raft.git
+
+# our work depends on Go, so make sure we're ready for that
+#
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+
+RUN mkdir -p /root/go/src/github.com/canonical 				&& \
+	cd /root/go/src/github.com/canonical 				&& \
+    	git clone https://github.com/canonical/go-dqlite.git		&& \
+    	cd go-dqlite && go get ./... || : # absorb any error so the target complete
+
+RUN printf "/usr/local/lib\ninclude /etc/ld.so.conf.d/*.conf\n" > /etc/ld.so.conf && ldconfig
+
+# host version uses ssh, but we don't want that inside docker container
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+# TODO: assimilate this with others upon cleanup
+RUN apt-get install -y lsof jq libreadline-dev libncurses-dev dnsutils
+
+ADD ./scripts/build_dqlite.sh .
+
+RUN ./build_dqlite.sh all
+
+RUN git clone https://github.com/golang/go.git
+
+

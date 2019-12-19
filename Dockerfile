@@ -1,52 +1,17 @@
-FROM ubuntu:xenial
+ARG release=xenial
+
+FROM paulstuart/dqlite-dev:${release}
 
 RUN apt-get update
 
-RUN apt-get install -y apt-utils software-properties-common && \
-	apt-get update
+# normal usage is to mount this against the version of 
+# the repo on the host, which will overwrite this local copy
+# regardless, this lets us at least get dependencies when
+# building inside the container
+RUN mkdir -p /root/go/src/github.com/paulstuart && \
+    cd /root/go/src/github.com/paulstuart 	&& \
+    git clone https://github.com/paulstuart/dqlited.git
 
-RUN apt-get install -y autoconf automake make libtool gcc
+RUN cd /root/go/src/github.com/paulstuart/dqlited && go get -u -v ./... || :
 
-RUN add-apt-repository -y ppa:dqlite/master && \
-	apt-get update && \
-	apt-get install -y dqlite libdqlite-dev
-
-RUN apt-get install -y net-tools
-
-RUN mkdir /opt/build
-WORKDIR /opt/build
-
-# TODO: move this to top when rebuilding fresh
-ENV DEBIAN_FRONTEND noninteractive
-
-WORKDIR /usr/local
-RUN apt-get install -y curl
-RUN curl -kL https://dl.google.com/go/go1.13.4.linux-amd64.tar.gz | tar -xzf -
-
-RUN echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-
-RUN apt-get install -y 	\
-	git 		\
-	man 		\
-	man-db		\
-	manpages 	\
-	net-tools	\
-	pkg-config 	\
-	strace		\
-	tcl-dev		\
-	vim 
-
-RUN mkdir -p ~/go/bin ~/go/pkg ~/go/src
-RUN mkdir -p /root/go/src/github.com/paulstuart
-
-# host version uses ssh, but we don't want that inside docker container
-RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
-
-RUN echo hey
-# get dependencies (TODO: rethink this after evaluating)
-RUN cd /root/go/src/github.com/paulstuart && git clone https://github.com/paulstuart/unitlite.git
-
-ENV PATH="/usr/local/go/bin:${PATH}"
-
-RUN cd /root/go/src/github.com/paulstuart/dqlited && go get -u -v ./...
-
+RUN go get -u golang.org/x/lint/golint

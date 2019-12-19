@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+*.sql
 
 # Test binary, build with `go test -c`
 *.test
@@ -12,4 +13,4 @@
 *.out
 
 # our executable
-dqlite
+dqlited

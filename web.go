@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -19,19 +20,21 @@ type WebHandler struct {
 	Func http.HandlerFunc
 }
 
+/*
 // RaftResponse is the Raft metadata that will be included with responses, if
 // the associated request modified the Raft log.
 type RaftResponse struct {
 	Index  uint64 `json:"index,omitempty"`
 	NodeID string `json:"node_id,omitempty"`
 }
+*/
 
 // Response represents a response from the HTTP service.
 type Response struct {
 	Results interface{}   `json:"results,omitempty"`
 	Error   string        `json:"error,omitempty"`
 	Time    float64       `json:"time,omitempty"`
-	Raft    *RaftResponse `json:"raft,omitempty"` // TODO: remove this after making pydqlite working
+//	Raft    *RaftResponse `json:"raft,omitempty"` // TODO: remove this after making pydqlite working
 }
 
 /*

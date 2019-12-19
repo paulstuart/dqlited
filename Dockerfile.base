@@ -1,0 +1,19 @@
+
+# the base image for working with dqlite 
+# this provides the pre-packaged distribution as a point of reference
+
+ARG release=xenial
+
+FROM ubuntu:${release}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update
+
+RUN apt-get install -y apt-utils software-properties-common && \
+	apt-get update
+
+RUN add-apt-repository -y ppa:dqlite/stable && \
+	apt-get update && \
+	apt-get install -y dqlite libdqlite-dev
+
