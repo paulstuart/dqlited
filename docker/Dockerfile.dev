@@ -1,0 +1,49 @@
+
+#
+# create an image for building dqlite from scratch
+# it builds upon the reference dqlite image to allow to stare and compare
+#
+
+ARG release=xenial
+
+FROM paulstuart/ubuntu-base:${release}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update
+
+RUN apt-get install -y 	\
+	autoconf 	\
+	automake 	\
+	gcc		\
+	git 		\
+	libncurses-dev	\
+	libreadline-dev	\
+	libtool 	\
+	make 		\
+	pkg-config 	\
+	tcl-dev
+
+# set up Go
+RUN cd /usr/local && \
+	curl -skL https://dl.google.com/go/go1.13.5.linux-amd64.tar.gz | tar -xzf -
+
+RUN mkdir -p /root/go/bin /root/go/mod /root/go/pkg /root/go/src
+ENV PATH=/usr/local/go/bin:/root/go/bin:$PATH
+RUN echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+
+
+# our build area
+
+RUN mkdir /opt/build
+WORKDIR /opt/build
+
+# make sure rebuilt libraries supercede installed versions
+RUN printf "/usr/local/lib\ninclude /etc/ld.so.conf.d/*.conf\n" > /etc/ld.so.conf && ldconfig
+
+# host mode of git uses ssh, but we don't want that inside docker container
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+RUN go get -u golang.org/x/lint/golint
+
+

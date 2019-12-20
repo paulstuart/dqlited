@@ -1,17 +1,17 @@
 ARG release=xenial
 
-FROM paulstuart/dqlite-dev:${release}
+FROM paulstuart/dqlite-dev:${release} as builder
+
+WORKDIR /root/go/src/github.com/paulstuart/dqlited/
+
+RUN make static
+
+FROM ubuntu:${release}
 
 RUN apt-get update
 
-# normal usage is to mount this against the version of 
-# the repo on the host, which will overwrite this local copy
-# regardless, this lets us at least get dependencies when
-# building inside the container
-RUN mkdir -p /root/go/src/github.com/paulstuart && \
-    cd /root/go/src/github.com/paulstuart 	&& \
-    git clone https://github.com/paulstuart/dqlited.git
+COPY  --from=builder /root/go/src/github.com/paulstuart/dqlited/dqlited /usr/local/bin/
 
-RUN cd /root/go/src/github.com/paulstuart/dqlited && go get -u -v ./... || :
+COPY  --from=builder /usr/local/bin/sqlite3 /usr/local/bin/
 
-RUN go get -u golang.org/x/lint/golint
+

@@ -20,30 +20,16 @@ type WebHandler struct {
 	Func http.HandlerFunc
 }
 
-/*
-// RaftResponse is the Raft metadata that will be included with responses, if
-// the associated request modified the Raft log.
-type RaftResponse struct {
-	Index  uint64 `json:"index,omitempty"`
-	NodeID string `json:"node_id,omitempty"`
-}
-*/
-
 // Response represents a response from the HTTP service.
 type Response struct {
-	Results interface{}   `json:"results,omitempty"`
-	Error   string        `json:"error,omitempty"`
-	Time    float64       `json:"time,omitempty"`
-//	Raft    *RaftResponse `json:"raft,omitempty"` // TODO: remove this after making pydqlite working
+	Results interface{} `json:"results,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Time    float64     `json:"time,omitempty"`
 }
 
-/*
-"/db/backup",
-"/db/connections",
-"/db/execute",
-"/db/load",
-"/db/query",
-*/
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Llongfile)
+}
 
 func myIP() string {
 	addrs, err := net.InterfaceAddrs()
@@ -62,12 +48,18 @@ func myIP() string {
 	panic("no IP address for you!")
 }
 
-// WebServer provides a web interface to the database
-func WebServer(port int, dbname string, cluster []string) {
+// StarServer provides a web interface to the database
+func StartServer(id int, skip bool, port int, dbname, dir, address string, cluster []string) {
+	log.Printf("starting server:%d ip:%s\n", id, myIP())
+	if err := nodeStart(id, !skip, dir, address, cluster...); err != nil {
+		panic(err)
+	}
+	log.Printf("setting up handlers for database: %s\n", dbname)
 	handlers, err := setupHandlers(dbname, cluster)
 	if err != nil {
 		panic(err)
 	}
+	log.Printf("starting webserver port: %d\n", port)
 	webServer(port, handlers...)
 }
 
@@ -103,7 +95,7 @@ func makeHandlers(exec Executor, query Queryor) []WebHandler {
 
 func homePage(w http.ResponseWriter, r *http.Request) {
 	log.Println("home page has been hit")
-	w.Write([]byte("nothing to see here"))
+	w.Write([]byte("nothing to see here\n"))
 }
 
 func makeHandleExec(exec Executor) http.HandlerFunc {

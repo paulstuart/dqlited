@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,80 @@ var (
 		"127.0.0.1:9183",
 	}
 )
+
+func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
+	if id == 0 {
+		return fmt.Errorf("ID must be greater than zero")
+	}
+	if address == "" {
+		address = fmt.Sprintf("127.0.0.1:918%d", id)
+		log.Printf("using default address: %q\n", address)
+	}
+	log.Printf("creating node: %d -- listening on %q (ip:%s)\n", id, address, myIP())
+	log.Printf("cluster: %v\n", cluster)
+	dir = filepath.Join(dir, fmt.Sprint(id))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.Wrapf(err, "can't create dir %s", dir)
+	}
+	bits := strings.Split(address, ":")
+	bind := "0.0.0.0:" + bits[1]
+	log.Printf("BIND ADDRESS: %s\n", bind)
+	node, err := dqlite.New(
+		uint64(id), address, dir,
+		dqlite.WithBindAddress(bind),
+		dqlite.WithNetworkLatency(defaultNetworkLatency),
+		//dqlite.WithLogFunc(logFunc),
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to create node")
+	}
+	log.Printf("starting node: %d\n", id)
+	if err := node.Start(); err != nil {
+		return errors.Wrap(err, "failed to start node")
+	}
+	const wait = 5 * time.Second
+	log.Printf("waiting %s for node to start\n", wait)
+	time.Sleep(wait)
+	log.Printf("get leader via cluster: %s\n", cluster)
+	client, err := getLeader(cluster)
+	if err != nil {
+		return errors.Wrap(err, "can't connect to cluster leader")
+	}
+
+	if add {
+		info := dqclient.NodeInfo{
+			ID:      uint64(id),
+			Address: address,
+		}
+
+		const addTimeout = time.Second * 10
+		ctx, cancel := context.WithTimeout(context.Background(), addTimeout)
+		defer cancel()
+
+		log.Printf("add mode with timeout of: %s\n", addTimeout)
+		if err := client.Add(ctx, info); err != nil {
+			return errors.Wrapf(err, "can't add node id: %d", id)
+		}
+	}
+
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT)
+	signal.Notify(sig, syscall.SIGTERM)
+	go func() {
+		bye := <-sig
+		log.Printf("server id: %d is shutting down on signal: %v\n", id, bye)
+
+		if err := client.Remove(context.Background(), uint64(id)); err != nil {
+			log.Printf("error removing cluster id:%d error:%v\n", id, err)
+		}
+		if err := node.Close(); err != nil {
+			log.Println("failed to stop node:", err)
+		}
+		log.Printf("server id: %d has shut down\n", id)
+		os.Exit(0)
+	}()
+	return nil
+}
 
 func clusterShow(address string, cluster ...string) error {
 	client, err := getLeader(cluster)
@@ -113,6 +188,7 @@ func dbStart(id int, dir, address, filename string, cluster ...string) error {
 	}
 	if address == "" {
 		address = fmt.Sprintf("127.0.0.1:918%d", id)
+		log.Printf("using default address: %q\n", address)
 	}
 	log.Printf("starting node: %d -- listening on %q\n", id, address)
 	dir = filepath.Join(dir, fmt.Sprint(id))

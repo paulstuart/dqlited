@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -16,13 +17,17 @@ import (
 	"github.com/pkg/errors"
 )
 
-func query(db *sql.DB, w io.Writer, statement string, args ...interface{}) error {
+func query(db *sql.DB, w io.Writer, lines bool, statement string, args ...interface{}) error {
 	rows, err := db.Query(statement)
 	if err != nil {
 		return errors.Wrap(err, "query failed")
 	}
 	defer rows.Close()
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.Debug)
+	flags := tabwriter.TabIndent
+	if lines {
+		flags |= tabwriter.Debug
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', flags)
 
 	columns, _ := rows.Columns()
 	buffer := make([]interface{}, len(columns))
@@ -58,6 +63,15 @@ func query(db *sql.DB, w io.Writer, statement string, args ...interface{}) error
 	return nil
 }
 
+func dbCmd(dbName string, cluster []string, divs bool, statements ...string) error {
+	db, err := getDB(dbName, cluster)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return dbExec(db, divs, statements...)
+}
+
 func getDB(dbName string, cluster []string) (*sql.DB, error) {
 	store := getStore(cluster)
 	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
@@ -70,32 +84,20 @@ func getDB(dbName string, cluster []string) (*sql.DB, error) {
 }
 
 // all purpose wrapper (for now) TODO: rethink this
-func dbExec(dbname string, cluster []string, statements ...string) error {
-	store := getStore(cluster)
-	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
-	if err != nil {
-		return errors.Wrapf(err, "failed to create dqlite driver")
-	}
-	sql.Register("dqlite", driver)
-
-	db, err := sql.Open("dqlite", dbname)
-	if err != nil {
-		return errors.Wrap(err, "can't open database")
-	}
-	defer db.Close()
-
+func dbExec(db *sql.DB, divs bool, statements ...string) error {
 	if len(statements) == 0 {
 		return fmt.Errorf("no statements given")
 	}
 	for i, statement := range statements {
 		action := strings.ToUpper(strings.Fields(statement)[0])
 		if action == "SELECT" || action == "PRAGMA" {
-			if err = query(db, os.Stdout, statement); err != nil {
-				return err
+			if err := query(db, os.Stdout, divs, statement); err != nil {
+				return errors.Wrapf(err, "dbExec query fail %d/%d", i+1, len(statements))
 			}
+			continue
 		}
 		if _, err := db.Exec(statement); err != nil {
-			return errors.Wrapf(err, "dbExec fail %d/%d", i+1, len(statements))
+			return errors.Wrapf(err, "dbExec fail (%T) %d/%d", err, i+1, len(statements))
 		}
 
 	}
@@ -253,4 +255,23 @@ func dbDump(filename, dbname string, cluster []string) error {
 		f.Close()
 	}
 	return nil
+}
+
+// for one-shot file loads
+func dbFile(filename, dbname string, cluster []string) error {
+	db, err := getDB(dbname, cluster)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return loadFile(db, filename)
+}
+
+func loadFile(db *sql.DB, fileName string) error {
+	buffer, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		return errors.Wrapf(err, "error reading file: %s", fileName)
+	}
+	_, err = db.Exec(string(buffer))
+	return err
 }

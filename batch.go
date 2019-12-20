@@ -22,13 +22,13 @@ func startsWith(data, sub string) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(data)), strings.ToUpper(sub))
 }
 
-func listTables(db *sql.DB, w io.Writer) error {
+func listTables(db *sql.DB, lines bool, w io.Writer) error {
 	q := `
 SELECT name FROM sqlite_master
 WHERE type='table'
 ORDER BY name
 `
-	return query(db, w, q)
+	return query(db, w, lines, q)
 }
 
 func batchCommand(echo bool, fileName, dbName string, cluster []string) error {
@@ -51,10 +51,14 @@ func Batch(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 	if w == nil {
 		w = os.Stdout
 	}
+	const divs = true // show lines in tables TODO: configurable
+
 	// strip comments
 	clean := commentC.ReplaceAll([]byte(buffer), []byte{})
 	clean = commentSQL.ReplaceAll(clean, []byte{})
-
+	//_, err := db.Exec(string(clean))
+	_, err := db.Exec(string(buffer))
+	return err
 	lines := strings.Split(string(clean), "\n")
 	multiline := "" // triggers are multiple lines
 	trigger := false
@@ -85,7 +89,7 @@ func Batch(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 			fmt.Fprintln(w, str)
 			continue
 		case strings.HasPrefix(line, ".tables"):
-			if err := listTables(db, w); err != nil {
+			if err := listTables(db, divs, w); err != nil {
 				return errors.Wrapf(err, "table error")
 			}
 			continue
@@ -110,7 +114,7 @@ func Batch(db *sql.DB, buffer string, echo bool, w io.Writer) error {
 			continue
 		}
 		if startsWith(multiline, "SELECT") {
-			if err := query(db, w, line); err != nil {
+			if err := query(db, w, divs, line); err != nil {
 				return errors.Wrapf(err, "query failed for: %q", line)
 			}
 		} else if _, err := db.Exec(multiline); err != nil {

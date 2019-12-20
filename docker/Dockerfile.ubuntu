@@ -1,0 +1,38 @@
+
+#
+# A miminal but useful setup of ubuntu for building, testing, and hosting
+# it builds upon the reference dqlite image to allow to stare and compare
+#
+
+ARG release=xenial
+
+FROM ubuntu:${release}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN apt-get update
+
+RUN apt-get install -y ca-certificates
+
+RUN apt-get install -y apt-utils software-properties-common && \
+	apt-get update
+
+RUN apt-get install -y 	\
+	curl		\
+	git 		\
+	lsof 		\
+	jq 		\
+	dnsutils 	\
+	man 		\
+	man-db		\
+	manpages 	\
+	netcat	 	\
+	nmap	 	\
+	net-tools	\
+	iputils-ping	\
+	strace		\
+	telnet		\
+	wamerican	\
+	vim 
+
+

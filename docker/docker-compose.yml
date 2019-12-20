@@ -1,0 +1,120 @@
+version: "3.7"
+services:
+  bastion:
+    image: paulstuart/dqlite-dev:xenial
+    hostname: bastion
+    restart: always
+    #stdin_open: true
+    tty: true
+    entrypoint:
+      - bash
+    volumes:
+      - .:/host
+
+  dqlbox1:
+    image: paulstuart/dqlite-debug:xenial
+    hostname: dqlbox1
+    restart: always
+    entrypoint:
+      - ./dqlited 
+      - server
+      - --id
+      - "1"
+      - --address
+      - "dqlbox1:9181" # "rbox:9181"
+      - --cluster
+      - "dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
+    ports:
+      - "4001:4001"
+      - "9181:9181"
+    volumes:
+      - .:/host
+
+  dqlbox2:
+    image: paulstuart/dqlite-debug:xenial
+    hostname: dqlbox2
+    restart: always
+    #context: /root/go/src/github.com/paulstuart/dqlited/
+    entrypoint:
+      - ./dqlited 
+      - server
+      - --id
+      - "2"
+      - --address
+      - "dqlbox2:9182" # "dqlbox2:9182"
+      - --cluster
+      - "dqlbox1:9181,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
+    depends_on:
+      - dqlbox1
+    ports:
+      - "4002:4001"
+      - "9182:9182"
+    volumes:
+      - .:/host
+
+  dqlbox3:
+    image: paulstuart/dqlite-debug:xenial
+    hostname: dqlbox3
+    restart: always
+    entrypoint:
+      - ./dqlited 
+      - server
+      - --id
+      - "3"
+      - --address
+      - "dqlbox3:9183" # "dqlbox3:9183"
+      - --cluster
+      - "dqlbox1:9181,dqlbox2:9182,dqlbox4:9184,dqlbox5:9185"
+    depends_on:
+      - dqlbox1
+    ports:
+      - "4003:4001"
+      - "9183:9183"
+    volumes:
+      - .:/host
+
+  dqlbox4:
+    image: paulstuart/dqlite-debug:xenial
+    hostname: dqlbox4
+    restart: always
+    entrypoint:
+      - ./dqlited 
+      - server
+      - --id
+      - "4"
+      - --address
+      - "dqlbox4:9184" # "dqlbox4:9184"
+      - --cluster
+      - "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox5:9185"
+    depends_on:
+      - dqlbox1
+    ports:
+      - "4004:4001"
+      - "9184:9184"
+    volumes:
+      - .:/host
+
+  dqlbox5:
+    image: paulstuart/dqlite-debug:xenial
+    hostname: dqlbox5
+    restart: always
+    entrypoint:
+      - ./dqlited 
+      - server
+      - --id
+      - "5"
+      - --address
+      - "dqlbox5:9185" # "dqlbox5:9185"
+      - --cluster
+      - "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox5:9184"
+    depends_on:
+      - dqlbox1
+    ports:
+      - "4005:4001"
+      - "9185:9185"
+    volumes:
+      - .:/host
+
+networks:
+  default:
+    name: dqlite-network

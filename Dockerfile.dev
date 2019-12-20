@@ -60,13 +60,15 @@ RUN mkdir -p /root/go/src/github.com/canonical 				&& \
     	git clone https://github.com/canonical/go-dqlite.git		&& \
     	cd go-dqlite && go get ./... || : # absorb any error so the target complete
 
+# make sure rebuilt libraries supercede installed versions
 RUN printf "/usr/local/lib\ninclude /etc/ld.so.conf.d/*.conf\n" > /etc/ld.so.conf && ldconfig
 
-# host version uses ssh, but we don't want that inside docker container
+# host mode of git uses ssh, but we don't want that inside docker container
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
 
 # TODO: assimilate this with others upon cleanup
-RUN apt-get install -y lsof jq libreadline-dev libncurses-dev dnsutils
+#RUN apt-get install -y lsof jq libreadline-dev libncurses-dev dnsutils libedit-dev
+RUN apt-get install -y lsof jq dnsutils libedit-dev
 
 ADD ./scripts/build_dqlite.sh .
 
@@ -74,4 +76,23 @@ RUN ./build_dqlite.sh all
 
 RUN git clone https://github.com/golang/go.git
 
+#RUN echo hey
+
+RUN apt-get install -y libreadline-dev libncurses-dev
+
+RUN apt-get install -y wamerican
+
+RUN go get -u golang.org/x/lint/golint
+
+#RUN git clone https://github.com/paulstuart/dqlited.git
+
+# normal usage is to mount this against the version of
+# the repo on the host, which will overwrite this local copy
+# regardless, this lets us at least get dependencies when
+# building inside the container
+RUN mkdir -p /root/go/src/github.com/paulstuart && \
+    cd /root/go/src/github.com/paulstuart 	&& \
+    git clone https://github.com/paulstuart/dqlited.git
+
+RUN cd /root/go/src/github.com/paulstuart/dqlited && go get -u -v ./... || :
 

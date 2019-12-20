@@ -2,10 +2,6 @@
 
 say() { printf "\n$*\n\n"; }
 
-say hello
-say bye
-exit
-
 libuv() {
 say "building libuv"
 cd libuv
@@ -26,8 +22,11 @@ cd -
 sqlite() {
 say "building sqlite"
 cd sqlite
+rm -f sqlite3 # force rebuild of binary
 git pull
 ./configure \
+	--disable-tcl 		\
+	--enable-readline 	\
 	--enable-editline 	\
 	--enable-fts5 		\
 	--enable-json1 		\
@@ -60,6 +59,8 @@ cd -
 }
 
 [[ -z $1 ]] && exit -1
+
+cd /opt/build
 
 case $1 in 
 	libco)  libco ;;

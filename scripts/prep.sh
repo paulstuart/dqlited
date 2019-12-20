@@ -12,6 +12,6 @@ dqlited adhoc "create table model (id integer primary key, name text, value text
 dqlited adhoc "insert into model (name, value) values('Bowie', 'Rock God')"
 
 # our migrated postgres dump
-dqlited batch -e -f sqlite.sql
+dqlited load -f sqlite.sql
 
 

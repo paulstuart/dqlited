@@ -1,0 +1,27 @@
+
+# the base image for working with dqlite 
+# this provides the pre-packaged distribution as a point of reference
+
+ARG release=xenial
+
+FROM paulstuart/dqlite-dev:${release}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+WORKDIR /root/go/src/github.com/paulstuart/dqlited 
+
+RUN echo hey
+
+COPY dqlited/. /root/go/src/github.com/paulstuart/dqlited/
+
+COPY FORK/go-dqlite/. /root/go/src/github.com/canonical/go-dqlite/
+
+RUN go get -u -v ./... || :
+
+RUN cp Makefile.copy Makefile # WTF is this happening?
+
+
+RUN make static
+
+RUN echo 'export PATH=$PATH:/root/go/src/github.com/paulstuart/dqlited/' >> ~/.bashrc
+

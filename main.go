@@ -13,6 +13,8 @@ import (
 
 const defaultDatabase = "demo.db"
 
+var version string = "unknown"
+
 func main() {
 	cmd := path.Base(os.Args[0])
 	root := newRoot(cmd)
@@ -34,33 +36,41 @@ func newRoot(cmdName string) *cobra.Command {
 	cmd.AddCommand(newAdd())
 	cmd.AddCommand(newCluster())
 	cmd.AddCommand(newAdhoc())
-	cmd.AddCommand(newWeb())
+	cmd.AddCommand(newServer())
 	cmd.AddCommand(newDumper())
-	cmd.AddCommand(newBatch())
+	cmd.AddCommand(newLoad())
 	cmd.AddCommand(newSeeker())
+	cmd.AddCommand(newVersion())
 
 	return cmd
 }
 
 // Start a web server for remote clients.
-func newWeb() *cobra.Command {
+func newServer() *cobra.Command {
 	var cluster []string
+	var dir string
+	var address string
 	var dbName string
-	var port int
+	var id, port int
+	var skip bool
 
 	cmd := &cobra.Command{
-		Use:   "webserver",
-		Short: "Start a web server.",
+		Use:   "server",
+		Short: "Start a server with web api.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			WebServer(port, dbName, cluster)
+			StartServer(id, skip, port, dbName, dir, address, cluster)
 			return nil
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
+	flags.StringVarP(&dir, "dir", "l", "/tmp/dqlited", "database working directory")
+	flags.StringVarP(&address, "address", "a", "", "address of the node (default is 127.0.0.1:918<ID>)")
 	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+	flags.IntVarP(&id, "id", "i", 1, "server id")
 	flags.IntVarP(&port, "port", "p", 4001, "port to serve traffic on")
+	flags.BoolVarP(&skip, "skip", "s", false, "do NOT add server to cluster")
 
 	return cmd
 }
@@ -142,16 +152,18 @@ func newAdd() *cobra.Command {
 func newAdhoc() *cobra.Command {
 	var cluster []string
 	var dbName string
+	var divs bool
 
 	cmd := &cobra.Command{
 		Use:   "adhoc <statment>...",
 		Short: "execute a statement against the demo database.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbExec(dbName, cluster, strings.Join(args, " "))
+			return dbCmd(dbName, cluster, divs, strings.Join(args, " "))
 		},
 	}
 	flags := cmd.Flags()
+	flags.BoolVarP(&divs, "dividers", "l", false, "print lines between columns")
 	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
 	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
 
@@ -178,24 +190,22 @@ func newDumper() *cobra.Command {
 	return cmd
 }
 
-// execute a batch of commands
-func newBatch() *cobra.Command {
+// load a file containing sql statements
+func newLoad() *cobra.Command {
 	var cluster []string
 	var dbName string
 	var fileName string
-	var echo bool
 
 	cmd := &cobra.Command{
-		Use:   "batch",
-		Short: "Execute the statements in a file.",
+		Use:   "load",
+		Short: "Execute the statements in in the given file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			batchCommand(echo, fileName, dbName, cluster)
+			dbFile(fileName, dbName, cluster)
 			return nil
 		},
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVarP(&echo, "echo", "e", false, "echo batch commands during execution")
 	flags.StringVarP(&dbName, "database", "d", defaultDatabase, "name of database to use")
 	flags.StringVarP(&fileName, "file", "f", "", "name of file to load")
 	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
@@ -218,6 +228,20 @@ func newSeeker() *cobra.Command {
 
 	flags := cmd.Flags()
 	flags.StringSliceVarP(&cluster, "cluster", "c", defaultCluster, "addresses of existing cluster nodes")
+
+	return cmd
+}
+
+// execute a poller that shows current leader
+func newVersion() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "show build version",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println(version)
+			return nil
+		},
+	}
 
 	return cmd
 }
