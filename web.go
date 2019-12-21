@@ -274,22 +274,6 @@ func level(req *http.Request) (store.ConsistencyLevel, error) {
 }
 */
 
-// backuFormat returns the request backup format, setting the response header
-// accordingly.
-/*
-func backupFormat(w http.ResponseWriter, r *http.Request) (store.BackupFormat, error) {
-	fmt, err := fmtParam(r)
-	if err != nil {
-		return store.BackupBinary, err
-	}
-	if fmt == "sql" {
-		w.Header().Set("Content-Type", "application/sql")
-		return store.BackupSQL, nil
-	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	return store.BackupBinary, nil
-}
-*/
 
 func prettyEnabled(e bool) string {
 	if e {

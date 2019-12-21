@@ -17,7 +17,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-func query(db *sql.DB, w io.Writer, lines bool, statement string, args ...interface{}) error {
+func query(db *sql.DB, w io.Writer, header, lines bool, statement string, args ...interface{}) error {
+	if w == nil {
+		w = os.Stdout
+	}
 	rows, err := db.Query(statement)
 	if err != nil {
 		return errors.Wrap(err, "query failed")
@@ -27,7 +30,7 @@ func query(db *sql.DB, w io.Writer, lines bool, statement string, args ...interf
 	if lines {
 		flags |= tabwriter.Debug
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', flags)
+	tw := tabwriter.NewWriter(w, 0, 0, 1, ' ', flags)
 
 	columns, _ := rows.Columns()
 	buffer := make([]interface{}, len(columns))
@@ -36,17 +39,18 @@ func query(db *sql.DB, w io.Writer, lines bool, statement string, args ...interf
 		scanTo[i] = &buffer[i]
 	}
 
-	// print header
-	for _, column := range columns {
-		fmt.Fprint(tw, column)
-		fmt.Fprint(tw, "\t")
+	if header {
+		for _, column := range columns {
+			fmt.Fprint(tw, column)
+			fmt.Fprint(tw, "\t")
+		}
+		fmt.Fprintln(tw)
+		for _, column := range columns {
+			fmt.Fprint(tw, strings.Repeat("-", len(column)))
+			fmt.Fprint(tw, "\t")
+		}
+		fmt.Fprintln(tw)
 	}
-	fmt.Fprintln(tw)
-	for _, column := range columns {
-		fmt.Fprint(tw, strings.Repeat("-", len(column)))
-		fmt.Fprint(tw, "\t")
-	}
-	fmt.Fprintln(tw)
 
 	for rows.Next() {
 		if err := rows.Scan(scanTo...); err != nil {
@@ -63,35 +67,45 @@ func query(db *sql.DB, w io.Writer, lines bool, statement string, args ...interf
 	return nil
 }
 
-func dbCmd(dbName string, cluster []string, divs bool, statements ...string) error {
+// run a query with a single column result and return the value of same
+func queryColumn(db *sql.DB, statement string, args ...interface{}) (string, error) {
+	var value string
+	row := db.QueryRow(statement, args...)
+	err := row.Scan(&value)
+	return value, err
+}
+
+func dbCmd(dbName string, cluster []string, header, divs bool, statements ...string) error {
 	db, err := getDB(dbName, cluster)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	return dbExec(db, divs, statements...)
+	return dbExec(db, header, divs, statements...)
 }
 
 func getDB(dbName string, cluster []string) (*sql.DB, error) {
 	store := getStore(cluster)
-	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
+	dbDriver, err := driver.New(store)
+	//dbDriver, err := driver.New(store, driver.WithLogger(logFunc))
+	//driver, err := driver.New(store, driver.WithLogger(DefaultLogger(nil)))
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create dqlite driver")
 	}
-	sql.Register("dqlite", driver)
+	sql.Register("dqlite", dbDriver)
 
 	return sql.Open("dqlite", dbName)
 }
 
 // all purpose wrapper (for now) TODO: rethink this
-func dbExec(db *sql.DB, divs bool, statements ...string) error {
+func dbExec(db *sql.DB, header, divs bool, statements ...string) error {
 	if len(statements) == 0 {
 		return fmt.Errorf("no statements given")
 	}
 	for i, statement := range statements {
 		action := strings.ToUpper(strings.Fields(statement)[0])
 		if action == "SELECT" || action == "PRAGMA" {
-			if err := query(db, os.Stdout, divs, statement); err != nil {
+			if err := query(db, os.Stdout, header, divs, statement); err != nil {
 				return errors.Wrapf(err, "dbExec query fail %d/%d", i+1, len(statements))
 			}
 			continue
@@ -114,9 +128,12 @@ type dbx struct {
 }
 
 // NewConnection creates a db connection
-func NewConnection(dbname string, cluster []string) (*dbx, error) {
+func NewConnection(dbName string, cluster []string) (*dbx, error) {
+/*
 	store := getStore(cluster)
-	driver, err := driver.New(store, driver.WithLogFunc(logFunc))
+	//driver, err := driver.New(store, driver.WithLogger(logFunc))
+	//driver, err := driver.New(store, DefaultLogger(nil))
+	driver, err := driver.New(store, driver.WithLogger(DefaultLogger(nil)))
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create dqlite driver")
 	}
@@ -126,8 +143,9 @@ func NewConnection(dbname string, cluster []string) (*dbx, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "can't open database")
 	}
-
-	return &dbx{db}, nil
+*/
+	db, err := getDB(dbName , cluster)
+	return &dbx{db}, err
 }
 
 func (d *dbx) Close() error {
@@ -275,3 +293,4 @@ func loadFile(db *sql.DB, fileName string) error {
 	_, err = db.Exec(string(buffer))
 	return err
 }
+

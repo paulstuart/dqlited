@@ -7,6 +7,11 @@ if [[ -f /.dockerenv ]]; then
    exit
 fi
  
+# now we're running in docker-compose
+docker-compose -p dqlited -f docker/docker-compose.yml exec bastion $@
+exit
+
+# the old way of testing in a single docker container
 RELEASE=xenial
 MNT=/root/go/src/github.com/paulstuart/dqlited 
 NAME=paulstuart/dqlited

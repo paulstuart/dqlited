@@ -231,45 +231,23 @@ func dbStart(id int, dir, address, filename string, cluster ...string) error {
 	return nil
 }
 
-func seeker(cluster ...string) error {
-	client, err := getLeader(cluster)
+
+func seeker(dbName, statement string, pause time.Duration, cluster ...string) error {
+	db, err := getDB(dbName, cluster)
 	if err != nil {
-		return errors.Wrap(err, "can't connect to cluster leader")
+		return err
 	}
-	defer client.Close()
+	defer db.Close()
 
-	var leader *dqclient.NodeInfo
-	var nodes []dqclient.NodeInfo
-
-	delay := time.Second
-
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), delay)
-
-		log.Println("get leader")
-		if leader, err = client.Leader(ctx); err != nil {
-			log.Println("can't get leader", err)
-			if client, err = getLeader(cluster); err != nil {
-				log.Println("total failure:", err)
-				//return err
-			}
-			goto sleep
+		value, err := queryColumn(db, statement)
+		if err == nil {
+			log.Println(value)
+		} else {
+			log.Println("query error:", err)
 		}
-
-		if nodes, err = client.Cluster(ctx); err != nil {
-			log.Println("can't get cluster", err)
-			goto sleep
-		}
-
-		log.Printf("ID \tLeader \tAddress\n")
-		for _, node := range nodes {
-			log.Printf("%d \t%v \t%s\n", node.ID, node.ID == leader.ID, node.Address)
-		}
-
-	sleep:
-		cancel()
-		fmt.Printf("sleep (%s)\n", delay)
-		time.Sleep(delay)
+		time.Sleep(pause)
 	}
 
 	return nil
