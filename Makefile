@@ -13,6 +13,9 @@ FRK	= $(CMN)/debian/Xenial/FORK
 #COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
 COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183"
 
+COMPOSE = docker-compose -p dqlited -f docker/docker-compose.yml
+
+
 help:	## this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
@@ -36,7 +39,7 @@ demo: kill watch start prep ## demonstrate the cluster bring up and fault tolera
 	
 # docker build targets
 
-.PHONY: ubuntu debug docker dqlited-dev dq dtest
+.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest
 
 DOCKER=docker build -f docker/Dockerfile
 
@@ -48,6 +51,9 @@ ubuntu-dev: # builds upon ubuntu-base
 
 dqlited-dev: # builds upon ubuntu-dev
 	@$(DOCKER) --target dqlited-dev  -t paulstuart/dqlite-dev:$(RELEASE) .
+
+dqlited-prod: # builds upon ubuntu-dev (for now, will use ubuntu-base once ready)
+	@$(DOCKER) --target dqlited-prod  -t paulstuart/dqlite-prod:$(RELEASE) .
 
 #debug:
 #	@docker build --no-cache -t paulstuart/dqlite-debug:$(RELEASE) .
@@ -65,32 +71,51 @@ dtest:
 	docker build --build-arg release=$(RELEASE) -t $(IMG) -f Dockerfile.test .
 
 # our docker-compose targets
-.PHONY: down up restart ps top bastion clu bounce status
+.PHONY: down up restart ps top bastion cluster clu bounce status comptest d1 d2 net log
+
+log:
+	@$(COMPOSE) logs
+
+net:
+	@$(COMPOSE) network
+
+comptest:
+	@$(COMPOSE) up -d bastion
+
+d1:
+	@$(COMPOSE) exec dqlbox1 bash
+	@#$(COMPOSE) up -d dqlbox1
+
+d2:
+	@$(COMPOSE) exec dqlbox2 bash
 
 ID =? 1
 
 bounce:
-	@docker-compose -p dqlited -f docker/docker-compose.yml restart dqlbox$(ID)
+	@$(COMPOSE) restart dqlbox$(ID)
 
 clu:
-	@docker-compose -p dqlited -f docker/docker-compose.yml exec bastion ./dqlited cluster -c $$DQLITE_CLUSTER
+	@$(COMPOSE) exec bastion ./dqlited cluster -c $$DQLITE_CLUSTER
 
 up:	## cluster starts
-	@docker-compose -p dqlited -f docker/docker-compose.yml up -d
+	@$(COMPOSE) up -d
 
 down:	## cluster stops
-	@docker-compose -p dqlited -f docker/docker-compose.yml down
+	@$(COMPOSE) down
 
 restart: down up ## cluster restarts everything
 
 ps:	## show processes
-	@docker-compose -p dqlited -f docker/docker-compose.yml ps
+	@$(COMPOSE) ps
 
 top:
-	@docker-compose -p dqlited -f docker/docker-compose.yml top
+	@$(COMPOSE) top
 
 bastion:
-	@docker-compose -p dqlited exec bastion bash
+	@$(COMPOSE) exec bastion bash
+
+cluster:
+	@$(COMPOSE) exec bastion ./dqlited cluster
 
 kill:
 	@pkill dqlited || :
@@ -182,7 +207,7 @@ dq:
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
 		paulstuart/dqlite-dev:$(RELEASE) bash
 
-.PHONY: comp
+.PHONY: comp prodtest
 # testing image used for composer
 comp:
 	docker run \
@@ -191,6 +216,15 @@ comp:
 		--privileged								\
 		--workdir $(MNT) 							\
 		paulstuart/dqlite-dev:$(RELEASE) bash
+
+# testing image used for composer
+prodtest:
+	docker run \
+		-it --rm \
+		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+		paulstuart/dqlite-prod:$(RELEASE) bash
 
 dqx:
 	docker run \

@@ -1,7 +1,7 @@
 version: "3.7"
 services:
   bastion:
-    image: paulstuart/dqlite-dev:xenial
+    image: paulstuart/dqlite-prod:xenial
     hostname: bastion
     restart: always
     #stdin_open: true
@@ -14,11 +14,11 @@ services:
       - .:/host
 
   dqlbox1:
-    image: paulstuart/dqlite-dev:xenial
+    image: paulstuart/dqlite-prod:xenial
     hostname: dqlbox1
     restart: always
     entrypoint:
-      - dqlited
+      - ./dqlited
       - server
       - --id
       - "1"
@@ -35,11 +35,11 @@ services:
       - .:/host
 
   dqlbox2:
-    image: paulstuart/dqlite-dev:xenial
+    image: paulstuart/dqlite-prod:xenial
     hostname: dqlbox2
     restart: always
     entrypoint:
-      - dqlited
+      - ./dqlited
       - server
       - --id
       - "2"
@@ -58,11 +58,11 @@ services:
       - .:/host
 
   dqlbox3:
-    image: paulstuart/dqlite-dev:xenial
+    image: paulstuart/dqlite-prod:xenial
     hostname: dqlbox3
     restart: always
     entrypoint:
-      - dqlited
+      - ./dqlited
       - server
       - --id
       - "3"

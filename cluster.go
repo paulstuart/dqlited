@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,11 +29,26 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 	if id == 0 {
 		return fmt.Errorf("ID must be greater than zero")
 	}
+	var bind string
 	if address == "" {
 		address = fmt.Sprintf("127.0.0.1:918%d", id)
+		bind = address
 		log.Printf("using default address: %q\n", address)
+	} else {
+		// we need to bind this address, so if it is name, we need to resolve it
+		// TODO: easy sanity check to see if it's already a numeric address
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return errors.Wrapf(err, "failed to split address: %q", address)
+		}
+		ipaddr, err := net.ResolveIPAddr("ip", host)
+		if err != nil {
+			return errors.Wrapf(err, "failed to resolve host: %q", host)
+		}
+		bind = net.JoinHostPort(ipaddr.String(), port)
+		log.Println("bind address is now:", bind)
 	}
-	log.Printf("creating node: %d -- listening on %q (ip:%s)\n", id, address, myIP())
+	log.Printf("creating node: %d @ %s -- listening on %q (ip:%s)\n", id, address, bind, myIP())
 	log.Printf("cluster: %v\n", cluster)
 	dir = filepath.Join(dir, fmt.Sprint(id))
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -51,7 +67,7 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 	*/
 	node, err := dqlite.New(
 		uint64(id), address, dir,
-		dqlite.WithBindAddress(address),
+		dqlite.WithBindAddress(bind),
 		dqlite.WithNetworkLatency(defaultNetworkLatency),
 	)
 	if err != nil {

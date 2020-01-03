@@ -135,12 +135,22 @@ RUN echo "export PATH=$PWD:\$PATH" >> ~/.bashrc
 # create a production image (but with having nice things for debugging)
 #
 
-FROM base-os as dqlited-prod
+#FROM base-os as dqlited-prod
+# whilst testing
+FROM dqlited-dev as dqlited-prod
 
 WORKDIR /root/go/src/github.com/paulstuart/dqlited/
 
-COPY  --from=dqlited-dev /root/go/src/github.com/paulstuart/dqlited/dqlited /usr/local/bin/
+#TESTING
+COPY . /root/go/src/github.com/paulstuart/dqlited/
 
-COPY  --from=dqlited-dev /usr/local/bin/sqlite3 /usr/local/bin/
+#TESTING
+RUN make static
+
+# revert to this after testing
+
+#COPY  --from=dqlited-dev /root/go/src/github.com/paulstuart/dqlited/dqlited /usr/local/bin/
+
+#COPY  --from=dqlited-dev /usr/local/bin/sqlite3 /usr/local/bin/
 
 
