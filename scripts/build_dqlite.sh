@@ -25,13 +25,13 @@ cd sqlite
 rm -f sqlite3 # force rebuild of binary
 git pull
 ./configure \
-	--disable-tcl 		\
-	--enable-readline 	\
-	--enable-editline 	\
-	--enable-fts5 		\
-	--enable-json1 		\
-	--enable-update-limit 	\
-	--enable-rtree 		\
+	--disable-tcl		\
+	--enable-readline	\
+	--enable-editline	\
+	--enable-fts5		\
+	--enable-json1		\
+	--enable-update-limit	\
+	--enable-rtree		\
 	--enable-replication &&	\
 	make -j && make install
 cd -
@@ -62,11 +62,14 @@ cd -
 
 cd /opt/build
 
-case $1 in 
+while [[ -n $1 ]]; do
+    case $1 in 
 	libco)  libco ;;
 	libuv)  libuv ;;
 	raft)   raft ;;
 	sqlite) sqlite ;;
 	dqlite) dqlite ;;
 	all) libuv ; libco ; raft ; sqlite ; dqlite;;
-esac
+    esac
+    shift
+done

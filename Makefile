@@ -1,4 +1,4 @@
-.PHONY: base help build static dev run-dev again active start prep bash q demo kill watch moar goversion ubuntu-dev
+.PHONY: vv base help build static dev run-dev again active start prep bash q demo watch moar ubuntu-dev
 
 VERSION = $(shell date '+%Y%m%d.%H:%M:%S') # version our executable with a timestamp (for now)
 RELEASE = xenial
@@ -9,40 +9,54 @@ CMN	= /Users/paul.stuart/CODE/DQLITE
 DQL	= $(CMN)/src/paulstuart/dqlite
 FRK	= $(CMN)/debian/Xenial/FORK
 
-DQLITED_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
+#DQLITED_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
+#COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
+COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183"
 
 help:	## this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-build:	## build the server executable
+vv:
+	@echo "VERSION -$(VERSION)-"
+
+build:	fmt 	## build the server executable
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-rpath=/usr/local/lib" go build -v -tags libsqlite3 -ldflags '-X main.version=$(VERSION)'
 
 static:	## build a statically linked binary
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags libsqlite3 -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
 
-demo: kill watch start prep moar ## demonstrate the cluster bring up and fault tolerance
+.PHONY: kill local redo
+
+redo:	build kill clean start
+
+local:
+	@./local
+
+demo: kill watch start prep ## demonstrate the cluster bring up and fault tolerance
 	
 # docker build targets
 
-.PHONY: ubuntu debug docker dqlite-dev dqdev dtest
+.PHONY: ubuntu debug docker dqlited-dev dq dtest
+
+DOCKER=docker build -f docker/Dockerfile
 
 ubuntu:
-	@docker build -t paulstuart/ubuntu-base:$(RELEASE) -f docker/Dockerfile.ubuntu .
+	@$(DOCKER) --target base-os  -t paulstuart/ubuntu-base:$(RELEASE) .
 
-ubuntu-dev:
-	@docker build -t paulstuart/ubuntu-dev:$(RELEASE) -f docker/Dockerfile.dev .
+ubuntu-dev: # builds upon ubuntu-base
+	@$(DOCKER) --target dev-env   -t paulstuart/ubuntu-dev:$(RELEASE) .
 
-dqlite-dev:
-	@docker build -t paulstuart/dqlite-dev:$(RELEASE) -f docker/Dockerfile.dqlite .
+dqlited-dev: # builds upon ubuntu-dev
+	@$(DOCKER) --target dqlited-dev  -t paulstuart/dqlite-dev:$(RELEASE) .
 
-debug:
-	@docker build --no-cache -t paulstuart/dqlite-debug:$(RELEASE) -f docker/Dockerfile.debug ..
+#debug:
+#	@docker build --no-cache -t paulstuart/dqlite-debug:$(RELEASE) .
 
-base:
-	docker build -t paulstuart/dqlite-base:$(RELEASE) -f Dockerfile.base .
-
-dev:
-	docker build -t paulstuart/dqlite-dev:$(RELEASE) -f Dockerfile.dev .
+#base:
+#	docker build -t paulstuart/dqlite-base:$(RELEASE) -f Dockerfile.base .
+#
+#dev:
+#	docker build -t paulstuart/dqlite-dev:$(RELEASE) -f Dockerfile.dev .
 
 docker:	## build a "production" image of dqlited
 	docker build --build-arg release=$(RELEASE) -t $(IMG) .
@@ -81,6 +95,14 @@ bastion:
 kill:
 	@pkill dqlited || :
 
+.phony: goversion fmt clean
+
+clean:
+	rm -rf /tmp/dqlited*
+
+fmt:
+	gofmt -s -w *.go
+
 goversion:
 	@curl -s -w "\n" https://golang.org/VERSION?m=text
 
@@ -108,11 +130,10 @@ status: ## show cluster status
 prep:
 	@scripts/prep.sh
 
-#
 # docker targets
 #
 
-.PHONEY: run forked try mine
+.PHONY: forked try mine run dqx
 
 try:
 	docker run \
@@ -132,26 +153,55 @@ run:
 		$(IMG) bash
 
 
+#DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183,127.0.0.1:9184,127.0.0.1:9185"
+DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183"
+LOCAL_CLUSTER = "@/tmp/dqlited.1.sock,@/tmp/dqlited.2.sock,@/tmp/dqlited.3.sock"
+
 # run docker with my forks mounted over originals
 mine:
 	@docker run \
 		-it --rm \
 		--network=dqlite-network				\
-		--env DQLITED_CLUSTER="$(DQLITED_CLUSTER)"		\
+		--env DQLITED_CLUSTER="$(DOCKER_CLUSTER)"		\
 		--workdir $(MNT) 					\
                 --mount type=bind,src="$(DQL)",dst="/opt/build/dqlite" 	\
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 		\
                 --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 	\
 		${DEVIMG} bash
 
-dqdev:
+# dev image with local forks mounted in place of originals
+dq:
 	docker run \
 		-it --rm \
 		-p 4001:4001 \
-		--workdir $(MNT) \
-                --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 						\
-                --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 	\
-                --mount type=bind,src="$(PWD)",dst=$(MNT) \
+		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 			\
+                --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 		\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
+		paulstuart/dqlite-dev:$(RELEASE) bash
+
+.PHONY: comp
+# testing image used for composer
+comp:
+	docker run \
+		-it --rm \
+		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+		paulstuart/dqlite-dev:$(RELEASE) bash
+
+dqx:
+	docker run \
+		-it --rm \
+		-p 4001:4001 \
+		-e DQLITED_CLUSTER=$(LOCAL_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 			\
+                --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 		\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
 		paulstuart/dqlite-dev:$(RELEASE) bash
 
 runX:

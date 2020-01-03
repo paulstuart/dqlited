@@ -2,29 +2,30 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
-	"strconv"
-	//"log"
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/spf13/cobra"
-	//"github.com/spf13/viper"
-	"github.com/paulstuart/envy"
-
 	"github.com/canonical/go-dqlite/client"
+	"github.com/paulstuart/envy"
+	"github.com/spf13/cobra"
 )
 
 const defaultDatabase = "demo.db"
+const DefaultTimeout = time.Second * 60
 
+// will be replaced with version info at link time
 var version string = "unknown"
 
 func main() {
+	log.Println("starting dqlited with PID:", os.Getpid())
+	defer log.Println("exiting dqlited with PID:", os.Getpid())
 	cmd := path.Base(os.Args[0])
 	root := newRoot(cmd)
 	if err := root.Execute(); err != nil {
+		log.Println(err)
 		os.Exit(1)
 	}
 }
@@ -44,43 +45,46 @@ func newRoot(cmdName string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   cmdName,
 		Short: "Manage dqlite servers",
-/*
-		RunE: func(cmd *cobra.Command, args []string) error {
-			//return fmt.Errorf("not implemented")
-			return nil
-		},
-*/
+		/*
+			RunE: func(cmd *cobra.Command, args []string) error {
+				//return fmt.Errorf("not implemented")
+				return nil
+			},
+		*/
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			run, ok := opts[level]
-			if ! ok {
+			if !ok {
 				return fmt.Errorf("invalid log level: %s\n", level)
 			}
-			logLevel = client.LogLevel(run)
+			defaultLogLevel = client.LogLevel(run)
 			return nil
 		},
 		TraverseChildren: true,
 	}
-	cmd.AddCommand(newStart())
-	cmd.AddCommand(newAdd())
+	//cmd.AddCommand(newStart())
+	//cmd.AddCommand(newAdd())
 	cmd.AddCommand(newCluster())
 	cmd.AddCommand(newAdhoc())
 	cmd.AddCommand(newServer())
 	cmd.AddCommand(newDumper())
 	cmd.AddCommand(newLoad())
-	cmd.AddCommand(newSeeker())
+	//cmd.AddCommand(newSeeker())
 	cmd.AddCommand(newVersion())
+	cmd.AddCommand(newHammer())
+	cmd.AddCommand(newReport())
 
 	flags := cmd.Flags()
-/*
-	have (*map[string]int, string, map[string]int, string)
-	want (*map[string]int, string, string, map[string]int, string)
+	/*
+		have (*map[string]int, string, map[string]int, string)
+		want (*map[string]int, string, string, map[string]int, string)
 
-*/
+	*/
 	//flags.StringToIntVarP(&choice, "level", "y", opts, "set logging level")
 	flags.StringVarP(&level, "level", "z", "error", "log level (debug, info, warn, error)")
 	return cmd
 }
 
+// return the "default" clusters
 func clusterList() []string {
 	if c := envy.String("DQLITED_CLUSTER"); c != "" {
 		return strings.Split(c, ",")
@@ -96,12 +100,14 @@ func newServer() *cobra.Command {
 	var dbName string
 	var id, port int
 	var skip bool
+	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "server",
 		Short: "Start a server with web api.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			StartServer(id, skip, port, dbName, dir, address, cluster)
+			log.Println("ENV DIR:", envy.StringDefault("DQLITED_TMP", "/tmp/dqlited"))
+			StartServer(id, skip, port, dbName, dir, address, timeout, cluster)
 			return nil
 		},
 	}
@@ -110,14 +116,16 @@ func newServer() *cobra.Command {
 	flags.StringVarP(&address, "address", "a", envy.StringDefault("DQLITED_ADDRESS", "127.0.0.1:9181"), "address of the node (default is 127.0.0.1:918<ID>)")
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
-	flags.StringVarP(&dir, "dir", "l", envy.StringDefault("DQLITED_DIR", "/tmp/dqlited"), "database working directory")
+	flags.StringVarP(&dir, "dir", "l", envy.StringDefault("DQLITED_TMP", "/tmp/dqlited"), "database working directory")
 	flags.IntVarP(&id, "id", "i", envy.IntDefault("DQLITED_ID", 1), "server id")
 	flags.IntVarP(&port, "port", "p", envy.IntDefault("DQLITED_PORT", 4001), "port to serve traffic on")
 	flags.BoolVarP(&skip, "skip", "s", envy.Bool("DQLITED_SKIP"), "do NOT add server to cluster")
+	flags.DurationVarP(&timeout, "timeout", "t", time.Minute*5, "time to wait for connection to complete")
 
 	return cmd
 }
 
+/*
 // Return a new start command.
 func newStart() *cobra.Command {
 	var dir string
@@ -142,35 +150,40 @@ func newStart() *cobra.Command {
 	flags.StringVarP(&address, "address", "a", envy.StringDefault("DQLITED_ADDRESS", "127.0.0.1:9181"), "address of the node (default is 127.0.0.1:918<ID>)")
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
-	flags.StringVarP(&dir, "dir", "l", envy.StringDefault("DQLITED_DIR", "/tmp/dqlited"), "database working directory")
+	flags.StringVarP(&dir, "dir", "l", envy.StringDefault("DQLITED_TMP", "/tmp/dqlited"), "database working directory")
 
 	return cmd
 }
+*/
 
 // Return a cluster nodes command.
 func newCluster() *cobra.Command {
 	var address string
 	var cluster []string
+	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "cluster",
 		Short: "display cluster nodes.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return clusterShow(address, cluster...)
+			return clusterShow(address, timeout, cluster...)
 		},
 	}
 	flags := cmd.Flags()
 	flags.StringVarP(&address, "address", "a", envy.StringDefault("DQLITED_ADDRESS", "127.0.0.1:9181"), "address of the node (default is 127.0.0.1:918<ID>)")
+	flags.DurationVarP(&timeout, "timeout", "t", time.Second*60, "time to wait for connection to complete")
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 
 	return cmd
 }
 
 // Return a new add command.
+/*
 func newAdd() *cobra.Command {
 	var address string
 	var cluster []string
+	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "add <id>",
@@ -181,16 +194,18 @@ func newAdd() *cobra.Command {
 			if err != nil {
 				return errors.Wrapf(err, "%s is not a number", args[0])
 			}
-			return clusterAdd(id, address, cluster)
+			return clusterAdd(id, address, timeout, cluster)
 		},
 	}
 
 	flags := cmd.Flags()
 	flags.StringVarP(&address, "address", "a", envy.StringDefault("DQLITED_ADDRESS", "127.0.0.1:9181"), "address of the node (default is 127.0.0.1:918<ID>)")
+	flags.DurationVarP(&timeout, "timeout", "t", time.Second*60, "time to wait for connection to complete")
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 
 	return cmd
 }
+*/
 
 // Return a new update key command.
 func newAdhoc() *cobra.Command {
@@ -214,22 +229,23 @@ func newAdhoc() *cobra.Command {
 	return cmd
 }
 
-// Return a new dump command.
+// Return a new database dump command.
 func newDumper() *cobra.Command {
 	var cluster []string
 	var dbName string
+	var timeout time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "dump database",
-		Short: "dump the Database and its associated WAL file.",
-		Args:  cobra.MinimumNArgs(1),
+		Short: "dump the database and its associated WAL file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return dbDump(args[0], dbName, cluster)
+			return dbDump(dbName, timeout, cluster)
 		},
 	}
 	flags := cmd.Flags()
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
+	flags.DurationVarP(&timeout, "timeout", "t", time.Second*60, "time to wait for connection to complete")
 
 	return cmd
 }
@@ -239,12 +255,16 @@ func newLoad() *cobra.Command {
 	var cluster []string
 	var dbName string
 	var fileName string
+	var batch, verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "load",
-		Short: "Execute the statements in in the given file.",
+		Short: "Execute the statements in the given file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dbFile(fileName, dbName, cluster)
+			if fileName == "" {
+				log.Fatal("no filename specified")
+			}
+			dbFile(fileName, dbName, batch, verbose, cluster)
 			return nil
 		},
 	}
@@ -253,10 +273,39 @@ func newLoad() *cobra.Command {
 	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
 	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
 	flags.StringVarP(&fileName, "file", "f", "", "name of file to load")
+	flags.BoolVarP(&batch, "batch", "b", false, "run all statements as a single transaction")
+	flags.BoolVarP(&verbose, "verbose", "v", false, "be chatty about activities")
 
 	return cmd
 }
 
+// report a file containing multiple sql query statements
+func newReport() *cobra.Command {
+	var cluster []string
+	var dbName string
+	var fileName string
+	var headers, lines bool
+
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "Execute the queries in in the given file.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dbReport(fileName, dbName, headers, lines, cluster)
+			return nil
+		},
+	}
+
+	flags := cmd.Flags()
+	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
+	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
+	flags.StringVarP(&fileName, "file", "f", "", "name of file to load")
+	flags.BoolVarP(&headers, "headers", "b", true, "show table headings")
+	flags.BoolVarP(&lines, "lines", "v", false, "print lines between columns")
+
+	return cmd
+}
+
+/*
 // execute a poller that shows current leader
 func newSeeker() *cobra.Command {
 	var cluster []string
@@ -281,8 +330,9 @@ func newSeeker() *cobra.Command {
 
 	return cmd
 }
+*/
 
-// execute a poller that shows current leader
+// show the application version and exit
 func newVersion() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "version",

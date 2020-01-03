@@ -9,11 +9,14 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 )
+
+const assetsDir = "assets"
 
 type WebHandler struct {
 	Path string
@@ -49,9 +52,10 @@ func myIP() string {
 }
 
 // StarServer provides a web interface to the database
-func StartServer(id int, skip bool, port int, dbname, dir, address string, cluster []string) {
-	log.Printf("starting server:%d ip:%s\n", id, myIP())
-	if err := nodeStart(id, !skip, dir, address, cluster...); err != nil {
+// No error to return as it's never intended to stop
+func StartServer(id int, skip bool, port int, dbname, dir, address string, timeout time.Duration, cluster []string) {
+	log.Printf("starting server node :%d dir: %q ip:%s\n", id, dir, myIP())
+	if err := nodeStart(id, !skip, dir, address, timeout, cluster...); err != nil {
 		panic(err)
 	}
 	log.Printf("setting up handlers for database: %s\n", dbname)
@@ -63,15 +67,22 @@ func StartServer(id int, skip bool, port int, dbname, dir, address string, clust
 	webServer(port, handlers...)
 }
 
+func faviconPage() http.HandlerFunc {
+	favicon := path.Join(assetsDir, "favicon.ico")
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, favicon)
+	}
+}
+
 func webServer(port int, handlers ...WebHandler) {
 	for _, handler := range handlers {
 		http.Handle(handler.Path, handler.Func)
 	}
-	//http.HandleFunc("/favicon.ico", faviconPage)
+	http.HandleFunc("/favicon.ico", faviconPage())
 
 	httpServer := fmt.Sprintf(":%d", port)
 	fmt.Printf("serve up web: http://%s%s/\n", myIP(), httpServer)
-	err := http.ListenAndServe(httpServer, nil)
+	err := ListenAndServe(httpServer, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -94,13 +105,22 @@ func makeHandlers(exec Executor, query Queryor) []WebHandler {
 }
 
 func homePage(w http.ResponseWriter, r *http.Request) {
-	log.Println("home page has been hit")
 	w.Write([]byte("nothing to see here\n"))
+}
+
+func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
+	enc := json.NewEncoder(w)
+	if pretty, _ := isPretty(r); pretty {
+		enc.SetIndent("", "    ")
+	}
+
+	if err := enc.Encode(j); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func makeHandleExec(exec Executor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Println("exec page has been hit")
 		if r.Method != "POST" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -124,7 +144,6 @@ func makeHandleExec(exec Executor) http.HandlerFunc {
 
 func makeHandleQuery(queryor Queryor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Println("query page has been hit")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		// TODO: add perm check and timing
 		if r.Method != "GET" && r.Method != "POST" {
@@ -139,42 +158,49 @@ func makeHandleQuery(queryor Queryor) http.HandlerFunc {
 			return
 		}
 		log.Printf("queries submitted: %v\n", queries)
-		// TODO: undo the mutiple queries rqlite nonsense
-		resp, err := queryor.QueryDB(queries[0])
-		if err != nil {
-			log.Printf("error executing queries: %v\n", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
 
-		reply := Response{
-			Results: resp,
+		for i, query := range queries {
+			resp, err := queryor.QueryRows(query)
+			if err != nil {
+				log.Printf("error executing queries (%d/%d): %q %v\n", i+1, len(queries), query, err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			reply := Response{
+				Results: resp,
+			}
+			enc := json.NewEncoder(w)
+			enc.Encode(reply)
 		}
-		enc := json.NewEncoder(w)
-		enc.Encode(reply)
 	}
 }
 
+// return the db queries submitted with the request
 func requestQueries(r *http.Request) ([]string, error) {
 	if r.Method == "GET" {
 		query, err := stmtParam(r)
-		if err != nil || query == "" {
-			return nil, errors.New("bad query GET request")
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get statement parameters")
+		}
+		if query == "" {
+			return nil, errors.New("no query given")
 		}
 		return []string{query}, nil
 	}
 
+	defer r.Body.Close()
+
 	qs := []string{}
 	b, err := ioutil.ReadAll(r.Body)
-	defer r.Body.Close()
 	if err != nil {
-		return nil, errors.New("bad query POST request")
+		return nil, errors.Wrap(err, "failed reading request body")
 	}
 	if err := json.Unmarshal(b, &qs); err != nil {
-		return nil, errors.New("bad query POST request")
+		return nil, errors.Wrap(err, "failed unmarshalling request")
 	}
 	if len(qs) == 0 {
-		return nil, errors.New("bad query POST request")
+		return nil, errors.New("empty request")
 	}
 
 	return qs, nil
@@ -224,6 +250,7 @@ func isPretty(req *http.Request) (bool, error) {
 }
 
 // isAtomic returns whether the HTTP request is an atomic request.
+// TODO: apply or remove this functionality (used by pydqlite)
 func isAtomic(req *http.Request) (bool, error) {
 	// "transaction" is checked for backwards compatibility with
 	// client libraries.
@@ -256,31 +283,13 @@ func idleTimeout(req *http.Request) (time.Duration, bool, error) {
 }
 
 /*
-// level returns the requested consistency level for a query
-func level(req *http.Request) (store.ConsistencyLevel, error) {
-	q := req.URL.Query()
-	lvl := strings.TrimSpace(q.Get("level"))
-
-	switch strings.ToLower(lvl) {
-	case "none":
-		return store.None, nil
-	case "weak":
-		return store.Weak, nil
-	case "strong":
-		return store.Strong, nil
-	default:
-		return store.Weak, nil
-	}
-}
-*/
-
-
 func prettyEnabled(e bool) string {
 	if e {
 		return "enabled"
 	}
 	return "disabled"
 }
+*/
 
 // NormalizeAddr ensures that the given URL has a HTTP protocol prefix.
 // If none is supplied, it prefixes the URL with "http://".

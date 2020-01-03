@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	//"strings"
 	"syscall"
 	"time"
 
@@ -24,7 +24,7 @@ var (
 	}
 )
 
-func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
+func nodeStart(id int, add bool, dir, address string, timeout time.Duration, cluster ...string) error {
 	if id == 0 {
 		return fmt.Errorf("ID must be greater than zero")
 	}
@@ -38,14 +38,21 @@ func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return errors.Wrapf(err, "can't create dir %s", dir)
 	}
-	bits := strings.Split(address, ":")
-	bind := "0.0.0.0:" + bits[1]
-	log.Printf("BIND ADDRESS: %s\n", bind)
+	/*
+		if !strings.HasPrefix(address, "@") {
+			bits := strings.Split(address, ":")
+			if len(bits) > 1 {
+				address = "0.0.0.0:" + bits[1]
+			} else {
+				address = "0.0.0.0:" + address
+			}
+		}
+		log.Printf("BIND ADDRESS: %s\n", address)
+	*/
 	node, err := dqlite.New(
 		uint64(id), address, dir,
-		dqlite.WithBindAddress(bind),
+		dqlite.WithBindAddress(address),
 		dqlite.WithNetworkLatency(defaultNetworkLatency),
-		//dqlite.WithLogFunc(logFunc),
 	)
 	if err != nil {
 		return errors.Wrap(err, "failed to create node")
@@ -54,12 +61,15 @@ func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
 	if err := node.Start(); err != nil {
 		return errors.Wrap(err, "failed to start node")
 	}
-	const wait = 5 * time.Second
-	log.Printf("waiting %s for node to start\n", wait)
-	time.Sleep(wait)
-	log.Printf("get leader via cluster: %s\n", cluster)
-	client, err := getLeader(cluster)
+	/*
+		const wait = 1 * time.Second
+		log.Printf("we're waiting %s for node to start\n", wait)
+		time.Sleep(wait)
+		log.Printf("ok get node leader via cluster: %s\n", cluster)
+	*/
+	client, err := getLeader(timeout, cluster)
 	if err != nil {
+		//log.Println("CRAPOLA:", err)
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
 
@@ -75,8 +85,11 @@ func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
 
 		log.Printf("add mode with timeout of: %s\n", addTimeout)
 		if err := client.Add(ctx, info); err != nil {
+			log.Printf("error adding node: %d (%s) to cluster: %v\n", id, address, err)
 			return errors.Wrapf(err, "can't add node id: %d", id)
 		}
+	} else {
+		log.Printf("skipping adding server: %d to cluster\n", id)
 	}
 
 	sig := make(chan os.Signal)
@@ -95,11 +108,12 @@ func nodeStart(id int, add bool, dir, address string, cluster ...string) error {
 		log.Printf("server id: %d has shut down\n", id)
 		os.Exit(0)
 	}()
+	log.Printf("node %d has been started\n", id)
 	return nil
 }
 
-func clusterShow(address string, cluster ...string) error {
-	client, err := getLeader(cluster)
+func clusterShow(address string, timeout time.Duration, cluster ...string) error {
+	client, err := getLeader(timeout, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
@@ -126,19 +140,21 @@ func clusterShow(address string, cluster ...string) error {
 	return nil
 }
 
-func clusterAdd(id int, address string, cluster []string) error {
+// add node <id> to <cluster>
+func clusterAdd(id int, address string, timeout time.Duration, cluster []string) error {
 	if id < 1 {
 		return fmt.Errorf("ID must be greater than zero")
 	}
 	if address == "" {
-		address = fmt.Sprintf("127.0.0.1:918%d", id)
+		return errors.New("address cannot be blank")
+		//address = fmt.Sprintf("127.0.0.1:918%d", id)
 	}
 	info := dqclient.NodeInfo{
 		ID:      uint64(id),
 		Address: address,
 	}
 
-	client, err := getLeader(cluster)
+	client, err := getLeader(timeout, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
@@ -156,9 +172,11 @@ func clusterAdd(id int, address string, cluster []string) error {
 
 const defaultNetworkLatency = 20 * time.Millisecond
 
+// listen for SIGUSR1 and dump cluster info to log
 func dumper(client *dqclient.Client) {
-	ch2 := make(chan os.Signal)
-	signal.Notify(ch2, syscall.SIGUSR1)
+	ch := make(chan os.Signal)
+	signal.Notify(ch, syscall.SIGUSR1)
+
 	go func(cc chan os.Signal) {
 		ctx := context.Background()
 		for {
@@ -179,7 +197,7 @@ func dumper(client *dqclient.Client) {
 				log.Println(node)
 			}
 		}
-	}(ch2)
+	}(ch)
 }
 
 func dbStart(id int, dir, address, filename string, cluster ...string) error {
@@ -208,7 +226,8 @@ func dbStart(id int, dir, address, filename string, cluster ...string) error {
 		return errors.Wrap(err, "failed to start node")
 	}
 
-	client, err := getLeader(cluster)
+	const timeout = time.Second * 60
+	client, err := getLeader(timeout, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
@@ -231,7 +250,7 @@ func dbStart(id int, dir, address, filename string, cluster ...string) error {
 	return nil
 }
 
-
+/*
 func seeker(dbName, statement string, pause time.Duration, cluster ...string) error {
 	db, err := getDB(dbName, cluster)
 	if err != nil {
@@ -252,3 +271,4 @@ func seeker(dbName, statement string, pause time.Duration, cluster ...string) er
 
 	return nil
 }
+*/
