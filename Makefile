@@ -1,7 +1,12 @@
 .PHONY: vv base help build static dev run-dev again active start prep bash q demo watch moar ubuntu-dev
 
 VERSION = $(shell date '+%Y%m%d.%H:%M:%S') # version our executable with a timestamp (for now)
+
+# docker mac stable as of 2020/01/07 is kernel 4.9.184, 
+# so let's not use bionic until docker updates (or we move to edge)
+# bionic uses kernel 4.15.0.74.76
 RELEASE = xenial
+
 IMG     = paulstuart/dqlited:$(RELEASE)
 GIT     = /root/go/src/github.com
 MNT     = $(GIT)/paulstuart/dqlited
@@ -28,7 +33,9 @@ build:	fmt 	## build the server executable
 static:	## build a statically linked binary
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags libsqlite3 -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
 
-.PHONY: kill local redo
+.PHONY: kill local redo depends
+
+depends: /opt/build/scripts/build_dqlited all
 
 redo:	build kill clean start
 
@@ -39,9 +46,12 @@ demo: kill watch start prep ## demonstrate the cluster bring up and fault tolera
 	
 # docker build targets
 
-.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest
+.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest hey
 
-DOCKER=docker build -f docker/Dockerfile
+hey:
+	echo RELEASE: $(RELEASE)
+
+DOCKER=docker build -f docker/Dockerfile --build-arg release=$(RELEASE)
 
 ubuntu:
 	@$(DOCKER) --target base-os  -t paulstuart/ubuntu-base:$(RELEASE) .
@@ -158,7 +168,7 @@ prep:
 # docker targets
 #
 
-.PHONY: forked try mine run dqx
+.PHONY: forked try mine run dqx run-ubuntu
 
 try:
 	docker run \
@@ -166,6 +176,12 @@ try:
 		$(IMG) bash
 
 DEVIMG = paulstuart/dqlite-dev:$(RELEASE)
+
+run-ubuntu:
+	docker run \
+		-it --rm \
+		--workdir $(MNT) \
+		paulstuart/ubuntu-base:$(RELEASE) bash
 
 run:
 	docker run \
@@ -193,6 +209,30 @@ mine:
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 		\
                 --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 	\
 		${DEVIMG} bash
+
+.PHONY: udev bionic
+
+# temp target for testing canonical/raft on ubuntu bionic
+bionic:
+	docker run \
+		-it --rm \
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
+		ubuntu:bionic bash
+
+# temp target for testing image
+udev:
+	docker run \
+		-it --rm \
+		-p 4001:4001 \
+		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 			\
+                --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 		\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
+		paulstuart/ubuntu-dev:$(RELEASE) bash
 
 # dev image with local forks mounted in place of originals
 dq:
@@ -272,7 +312,7 @@ forked:
                 --mount type=bind,src="$(DQL)",dst="/opt/build/dqlite" 	\
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 		\
                 --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 	\
-		paulstuart/dqlited:xenial bash
+		paulstuart/dqlited:$(RELEASE) bash
 
 again:
 	@docker exec \

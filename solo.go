@@ -8,6 +8,8 @@ import (
 	"net/http"
 )
 
+// ListenAndServe abstracts http serving (to allow replacement
+// with nginx Unit
 func ListenAndServe(address string, handler http.Handler) error {
 	return http.ListenAndServe(address, handler)
 }

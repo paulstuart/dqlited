@@ -137,7 +137,7 @@ func hammer(id, count int, dbName string, cluster ...string) {
 			count--
 			//log.Printf("completed %d/%d\n", starting-count, starting)
 			if count == 0 {
-				return
+				break
 			}
 		}
 	}

@@ -8,13 +8,23 @@ import (
 	"github.com/canonical/go-dqlite/client"
 )
 
+// LogFunc is a go-dqlite logging function
 type LogFunc = client.LogFunc
+
+// LogLevel is a go-dqlite logging level
 type LogLevel = client.LogLevel
 
 const (
+	// LogDebug is logging at debug level
 	LogDebug = client.LogDebug
-	LogInfo  = client.LogInfo
-	LogWarn  = client.LogWarn
+
+	// LogInfo is logging at info level
+	LogInfo = client.LogInfo
+
+	// LogWarn is logging at warn level
+	LogWarn = client.LogWarn
+
+	// LogError is logging at error level
 	LogError = client.LogError
 )
 

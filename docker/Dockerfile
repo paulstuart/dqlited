@@ -5,18 +5,26 @@
 # it builds upon the reference dqlite image to allow to stare and compare
 #
 
+# bionic and others seem to have issues on docker mac (stable)
 ARG release=xenial
 
 FROM ubuntu:${release} as base-os
 
 ENV DEBIAN_FRONTEND noninteractive
 
+RUN echo "using release: ${release}"
+
+# Do not exclude man pages & other documentation (as of Bionic)
+RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes
+
 RUN apt-get update
+
+# make install happy
+RUN apt-get install -y apt-utils
 
 # basics for repo mgmt
 RUN apt-get install -y 			\
 	ca-certificates			\
-	apt-utils 			\
 	software-properties-common 	\
 	apt-transport-https &&		\
 	apt-get update
@@ -38,12 +46,11 @@ RUN apt-get install -y 	\
 	netcat	 	\
 	nmap	 	\
 	socat	 	\
+	sudo	 	\
 	strace		\
 	telnet		\
 	wamerican	\
 	vim
-
-
 
 ######################################################################################
 #
@@ -60,6 +67,7 @@ RUN apt-get install -y 	\
 	automake 	\
 	gcc		\
 	git 		\
+	libaio-dev	\
 	libncurses-dev	\
 	libreadline-dev	\
 	libtool 	\
@@ -91,6 +99,18 @@ RUN go get -u golang.org/x/lint/golint
 # make gdb happier with Go
 RUN echo "add-auto-load-safe-path /usr/local/go/src/runtime/runtime-gdb.py" >> /root/.gdbinit
 
+# upgrade vim (if we're still on Xenial
+ADD scripts/build_vim.sh /tmp
+RUN /tmp/build_vim.sh
+
+# move this up once its working correctly
+RUN git clone https://github.com/fatih/vim-go.git ~/.vim/pack/plugins/start/vim-go
+
+# add the vim-go supporting binaries
+RUN vim +GoInstallBinaries +qall
+
+# TODO: move this up to base-os
+RUN echo "alias vi='vim'" >> ~/.bash_aliases
 
 ######################################################################################
 #
@@ -139,6 +159,8 @@ RUN echo "export PATH=$PWD:\$PATH" >> ~/.bashrc
 # whilst testing
 FROM dqlited-dev as dqlited-prod
 
+RUN scripts/sources.sh .
+
 WORKDIR /root/go/src/github.com/paulstuart/dqlited/
 
 #TESTING
@@ -152,5 +174,3 @@ RUN make static
 #COPY  --from=dqlited-dev /root/go/src/github.com/paulstuart/dqlited/dqlited /usr/local/bin/
 
 #COPY  --from=dqlited-dev /usr/local/bin/sqlite3 /usr/local/bin/
-
-

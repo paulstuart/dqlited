@@ -208,9 +208,8 @@ func (dx *dbx) exec(query string, args ...interface{}) (result sql.Result, err e
 	for i := 0; i < retryLimit; i++ {
 		if result, err = dx.db.Exec(query, args...); err == nil {
 			return
-		} else {
-			log.Printf("dbx exec (%d/%d::%T) err: %v\n", i+1, retryLimit, err, err)
 		}
+		log.Printf("dbx exec (%d/%d::%T) err: %v\n", i+1, retryLimit, err, err)
 		if derr, ok := err.(driver.Error); ok {
 			// don't retry if its an actual sql failure
 			if derr.Code > 0 {
@@ -242,6 +241,7 @@ type dbx struct {
 	verbose bool
 }
 
+// NewDbx returns a new dbx struct (TODO: only expose NewConnection?)
 func NewDbx(db *sql.DB, name string) *dbx {
 	return &dbx{db: db, name: name, w: os.Stdout, header: true}
 }
@@ -252,22 +252,22 @@ func NewConnection(dbName string, cluster []string) (*dbx, error) {
 	return NewDbx(db, dbName), err
 }
 
-func (d *dbx) Close() error {
+func (dx *dbx) Close() error {
 	dbxMu.Lock()
 	defer dbxMu.Unlock()
-	delete(dbxDB, d.name)
+	delete(dbxDB, dx.name)
 	// TODO: add a ref count to keep shared dbs open
-	return d.db.Close()
+	return dx.db.Close()
 }
 
-func (d *dbx) QueryRows(query string, args ...interface{}) ([]Rows, error) {
+func (dx *dbx) QueryRows(query string, args ...interface{}) ([]Rows, error) {
 	log.Printf("QUERY: %s ARGS: %v\n", query, args)
 	reply := make([]Rows, 0, 32)
 	action := strings.ToUpper(strings.Fields(query)[0])
 	if action != "SELECT" && action != "PRAGMA" {
 		return nil, fmt.Errorf("Invalid action: %q -- must use SELECT", action)
 	}
-	rows, err := d.db.Query(query)
+	rows, err := dx.db.Query(query)
 	if err != nil {
 		return nil, errors.Wrap(err, "query failed")
 	}
@@ -322,16 +322,19 @@ type Rows struct {
 	Time    float64         `json:"time,omitempty"`
 }
 
-// ExecuteReponse
+// ExecuteResponse is the response used by pydqlite
 type ExecuteResponse struct {
 	Results []Result `json:"results,omitempty"`
 	Time    float64  `json:"time,omitempty"`
 }
 
+// Executor interface abstracts database execution
 type Executor interface {
 	Execute(statements ...string) (*ExecuteResponse, error)
 }
 
+// Execute will execute a series of statements, exec and query
+// TODO: consolidate with Batch?
 func (dx *dbx) Execute(statements ...string) (*ExecuteResponse, error) {
 	dx.mu.Lock()
 	defer dx.mu.Unlock()
@@ -526,7 +529,7 @@ func CleanText(s string) string {
 // Normally statements are terminated by ";" but this is complicated
 // by trigger statements which include one or more statements with
 // their own ";" occurances between the BEGIN and END
-func (dx dbx) Batch(buffer string) error {
+func (dx *dbx) Batch(buffer string) error {
 	w := dx.w
 	if w == nil {
 		w = os.Stdout

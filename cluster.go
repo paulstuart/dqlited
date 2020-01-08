@@ -8,8 +8,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	//"strings"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	dqlite "github.com/canonical/go-dqlite"
@@ -25,7 +26,32 @@ var (
 	}
 )
 
-func nodeStart(id int, add bool, dir, address string, timeout time.Duration, cluster ...string) error {
+func Assign(id uint64, role dqclient.NodeRole, timeout time.Duration, cluster []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	client, err := getLeader(timeout, cluster)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Assign(ctx, id, role)
+}
+
+func Transfer(id uint64, timeout time.Duration, cluster []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	client, err := getLeader(timeout, cluster)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.Transfer(ctx, id)
+}
+
+// TODO: make id a uint64 and stop casting inside function
+func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout time.Duration, cluster ...string) error {
 	if id == 0 {
 		return fmt.Errorf("ID must be greater than zero")
 	}
@@ -54,17 +80,6 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return errors.Wrapf(err, "can't create dir %s", dir)
 	}
-	/*
-		if !strings.HasPrefix(address, "@") {
-			bits := strings.Split(address, ":")
-			if len(bits) > 1 {
-				address = "0.0.0.0:" + bits[1]
-			} else {
-				address = "0.0.0.0:" + address
-			}
-		}
-		log.Printf("BIND ADDRESS: %s\n", address)
-	*/
 	node, err := dqlite.New(
 		uint64(id), address, dir,
 		dqlite.WithBindAddress(bind),
@@ -73,6 +88,7 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 	if err != nil {
 		return errors.Wrap(err, "failed to create node")
 	}
+
 	log.Printf("starting node: %d\n", id)
 	if err := node.Start(); err != nil {
 		return errors.Wrap(err, "failed to start node")
@@ -88,11 +104,18 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 		//log.Println("CRAPOLA:", err)
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
-
+	/*
+		ctx := context.Background()
+		log.Printf("assigning node: %d role: %d\n", id, role)
+		if err := client.Assign(ctx, uint64(id), dqclient.NodeRole(role)); err != nil {
+			return errors.Wrap(err, "faied to assign role to node")
+		}
+	*/
 	if add {
 		info := dqclient.NodeInfo{
 			ID:      uint64(id),
 			Address: address,
+			Role:    dqclient.NodeRole(role),
 		}
 
 		const addTimeout = time.Second * 10
@@ -117,6 +140,8 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 
 		if err := client.Remove(context.Background(), uint64(id)); err != nil {
 			log.Printf("error removing cluster id:%d error:%v\n", id, err)
+		} else {
+			log.Printf("removed self from cluster (id:%d)\n", id)
 		}
 		if err := node.Close(); err != nil {
 			log.Println("failed to stop node:", err)
@@ -126,6 +151,32 @@ func nodeStart(id int, add bool, dir, address string, timeout time.Duration, clu
 	}()
 	log.Printf("node %d has been started\n", id)
 	return nil
+}
+
+// NodeRole is a go-dqlite Node role (e.g., voter, standby, or spare)
+type NodeRole dqclient.NodeRole
+
+const (
+	// Voter node will replicate data and participate in quorum
+	Voter = NodeRole(0)
+
+	// Standby node will replicate data but won't participate in quorum
+	Standby = NodeRole(1)
+
+	// Spare node won't replicate data and won't participate in quorum
+	Spare = NodeRole(2)
+)
+
+func nodeRole(s string) (NodeRole, error) {
+	switch strings.ToLower(s) {
+	case "voter":
+		return Voter, nil
+	case "standby":
+		return Standby, nil
+	case "spare":
+		return Spare, nil
+	}
+	return NodeRole(255), fmt.Errorf("invalid role name: %q", s)
 }
 
 func clusterShow(address string, timeout time.Duration, cluster ...string) error {
@@ -149,10 +200,26 @@ func clusterShow(address string, timeout time.Duration, cluster ...string) error
 		return errors.Wrap(err, "can't get cluster")
 	}
 
-	fmt.Printf("ID \tLeader \tAddress\n")
+	flags := tabwriter.TabIndent
+
+	// tabwriter args: output, minwidth, tabwidth, padding, padchar, flags
+	tw := tabwriter.NewWriter(
+		os.Stdout, // io.Writer
+		0,         // min width
+		0,         // tab width
+		1,         // padding
+		' ',       // pad character
+		flags,     // behavior flags
+	)
+
+	fmt.Fprintf(tw, "ID \tRole \tLeader \tAddress\n")
 	for _, node := range nodes {
-		fmt.Printf("%d \t%v \t%s\n", node.ID, node.ID == leader.ID, node.Address)
+		isLeader := node.ID == leader.ID
+		//role := nodeType(int(node.Role))
+		//role := node.Role.String() //nodeType(NodeRole(node.Role))
+		fmt.Fprintf(tw, "%d \t%s \t%t \t%s\n", node.ID, node.Role, isLeader, node.Address)
 	}
+	tw.Flush()
 	return nil
 }
 

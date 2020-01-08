@@ -18,6 +18,7 @@ import (
 
 const assetsDir = "assets"
 
+// WebHandler is the mapping of a path to its http handler
 type WebHandler struct {
 	Path string
 	Func http.HandlerFunc
@@ -51,11 +52,16 @@ func myIP() string {
 	panic("no IP address for you!")
 }
 
-// StarServer provides a web interface to the database
+// StartServer provides a web interface to the database
 // No error to return as it's never intended to stop
-func StartServer(id int, skip bool, port int, dbname, dir, address string, timeout time.Duration, cluster []string) {
-	log.Printf("starting server node :%d dir: %q ip:%s\n", id, dir, myIP())
-	if err := nodeStart(id, !skip, dir, address, timeout, cluster...); err != nil {
+// TODO: too many args, consolidate into config struct
+func StartServer(id int, skip bool, port int, dbname, dir, address, roleName string, timeout time.Duration, cluster []string) {
+	log.Printf("starting server node :%d (%s) dir: %q ip:%s\n", id, roleName, dir, myIP())
+	role, err := nodeRole(roleName)
+	if err != nil {
+		panic(err)
+	}
+	if err := nodeStart(id, role, !skip, dir, address, timeout, cluster...); err != nil {
 		panic(err)
 	}
 	log.Printf("setting up handlers for database: %s\n", dbname)
