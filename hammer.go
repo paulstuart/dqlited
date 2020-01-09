@@ -42,7 +42,7 @@ func newHammer() *cobra.Command {
 	return cmd
 }
 
-func (dx *dbx) stretch(count int) {
+func (dx *DBX) stretch(count int) {
 	for i := 0; i < count; i++ {
 		res, err := dx.exec(simple, i)
 		if err != nil {

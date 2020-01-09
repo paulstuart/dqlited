@@ -24,8 +24,8 @@ var version string = "unknown"
 
 func main() {
 	// TODO: these log statements should only print if verbose mode
-	log.Println("starting dqlited with PID:", os.Getpid())
-	defer log.Println("exiting dqlited with PID:", os.Getpid())
+	//log.Println("starting dqlited with PID:", os.Getpid())
+	//defer log.Println("exiting dqlited with PID:", os.Getpid())
 
 	cmd := path.Base(os.Args[0])
 	root := newRoot(cmd)
@@ -66,7 +66,7 @@ func newRoot(cmdName string) *cobra.Command {
 		},
 		TraverseChildren: true,
 	}
-	cmd.AddCommand(newCluster())
+	cmd.AddCommand(newStatus())
 	cmd.AddCommand(newAdhoc())
 	cmd.AddCommand(newServer())
 	cmd.AddCommand(newDumper())
@@ -78,7 +78,6 @@ func newRoot(cmdName string) *cobra.Command {
 	cmd.AddCommand(newAssign())
 
 	flags := cmd.Flags()
-	//flags.StringToIntVarP(&choice, "level", "y", opts, "set logging level")
 	flags.StringVarP(&level, "level", "z", "error", "log level (debug, info, warn, error)")
 	return cmd
 }
@@ -126,14 +125,14 @@ func newServer() *cobra.Command {
 	return cmd
 }
 
-// Return a cluster nodes command.
-func newCluster() *cobra.Command {
+// Return a status command.
+func newStatus() *cobra.Command {
 	var address string
 	var cluster []string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "cluster",
+		Use:   "status",
 		Short: "display cluster nodes.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -175,17 +174,11 @@ func newAssign() *cobra.Command {
 	var timeout time.Duration
 
 	roles := map[string]int{
-		/*
-			Voter.String():     int(Voter),
-			Spare{}.String():   int(Spare),
-			Standby{}.String(): int(Standby),
-		*/
-		"voter":   int(Voter),
-		"spare":   int(Spare),
-		"standby": int(Standby),
+		client.Voter.String():   int(Voter),
+		client.Spare.String():   int(Spare),
+		client.StandBy.String(): int(Standby),
 	}
-	//opts := mapKeys(roles)
-	choices := &FlagChoice{choices: mapKeys(roles)}
+	choices := &FlagChoice{choices: mapKeys(roles), chosen: client.Voter.String()}
 
 	cmd := &cobra.Command{
 		Use:   "assign <id> <role>",
@@ -196,7 +189,6 @@ func newAssign() *cobra.Command {
 				return err
 			}
 			return Assign(uint64(id), client.NodeRole(r), timeout, cluster)
-			//return nil
 		},
 	}
 	flags := cmd.Flags()
@@ -330,11 +322,21 @@ func mapKeys(m map[string]int) []string {
 	return keys
 }
 
+// FlagChoice is a f FlagSet that allows the user to pick from a list
 type FlagChoice struct {
 	choices []string
 	chosen  string
 }
 
+// NewFlagChoice returns a new FlagChoice
+func NewFlagChoice(choices []string, chosen string) *FlagChoice {
+	return &FlagChoice{
+		choices: choices,
+		chosen:  chosen,
+	}
+}
+
+// String satisfies the FlagSet interface
 func (f *FlagChoice) String() string {
 	switch len(f.choices) {
 	case 0:
@@ -362,6 +364,7 @@ func (f *FlagChoice) String() string {
 	}
 }
 
+// Set satisfies the FlagSet interface
 func (f *FlagChoice) Set(value string) error {
 	for _, choice := range f.choices {
 		if choice == value {
@@ -372,6 +375,7 @@ func (f *FlagChoice) Set(value string) error {
 	return fmt.Errorf("%q is not a valid choice, must be: %s", value, f.String())
 }
 
+// Type satisfies the FlagSet interface
 func (f *FlagChoice) Type() string {
 	return "choose from list"
 }

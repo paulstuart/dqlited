@@ -26,6 +26,7 @@ var (
 	}
 )
 
+// Assign sets a new role for a node
 func Assign(id uint64, role dqclient.NodeRole, timeout time.Duration, cluster []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -38,6 +39,7 @@ func Assign(id uint64, role dqclient.NodeRole, timeout time.Duration, cluster []
 	return client.Assign(ctx, id, role)
 }
 
+// Transfer tries to transfer leadership to a new role
 func Transfer(id uint64, timeout time.Duration, cluster []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -104,13 +106,6 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 		//log.Println("CRAPOLA:", err)
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
-	/*
-		ctx := context.Background()
-		log.Printf("assigning node: %d role: %d\n", id, role)
-		if err := client.Assign(ctx, uint64(id), dqclient.NodeRole(role)); err != nil {
-			return errors.Wrap(err, "faied to assign role to node")
-		}
-	*/
 	if add {
 		info := dqclient.NodeInfo{
 			ID:      uint64(id),
@@ -118,6 +113,7 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 			Role:    dqclient.NodeRole(role),
 		}
 
+		// TODO: make configurable
 		const addTimeout = time.Second * 10
 		ctx, cancel := context.WithTimeout(context.Background(), addTimeout)
 		defer cancel()
@@ -131,9 +127,9 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 		log.Printf("skipping adding server: %d to cluster\n", id)
 	}
 
+	// if we are killed, inform the remainder of the cluster
 	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT)
-	signal.Notify(sig, syscall.SIGTERM)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		bye := <-sig
 		log.Printf("server id: %d is shutting down on signal: %v\n", id, bye)
@@ -149,6 +145,7 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 		log.Printf("server id: %d has shut down\n", id)
 		os.Exit(0)
 	}()
+
 	log.Printf("node %d has been started\n", id)
 	return nil
 }
@@ -158,7 +155,8 @@ type NodeRole dqclient.NodeRole
 
 const (
 	// Voter node will replicate data and participate in quorum
-	Voter = NodeRole(0)
+	//Voter = NodeRole(0)
+	Voter = NodeRole(dqclient.Voter)
 
 	// Standby node will replicate data but won't participate in quorum
 	Standby = NodeRole(1)
@@ -190,19 +188,18 @@ func clusterShow(address string, timeout time.Duration, cluster ...string) error
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	var leader *dqclient.NodeInfo
-	var nodes []dqclient.NodeInfo
-	if leader, err = client.Leader(ctx); err != nil {
+	leader, err := client.Leader(ctx)
+	if err != nil {
 		return errors.Wrap(err, "can't get leader")
 	}
 
-	if nodes, err = client.Cluster(ctx); err != nil {
+	nodes, err := client.Cluster(ctx)
+	if err != nil {
 		return errors.Wrap(err, "can't get cluster")
 	}
 
 	flags := tabwriter.TabIndent
 
-	// tabwriter args: output, minwidth, tabwidth, padding, padchar, flags
 	tw := tabwriter.NewWriter(
 		os.Stdout, // io.Writer
 		0,         // min width
@@ -215,8 +212,6 @@ func clusterShow(address string, timeout time.Duration, cluster ...string) error
 	fmt.Fprintf(tw, "ID \tRole \tLeader \tAddress\n")
 	for _, node := range nodes {
 		isLeader := node.ID == leader.ID
-		//role := nodeType(int(node.Role))
-		//role := node.Role.String() //nodeType(NodeRole(node.Role))
 		fmt.Fprintf(tw, "%d \t%s \t%t \t%s\n", node.ID, node.Role, isLeader, node.Address)
 	}
 	tw.Flush()
@@ -230,7 +225,6 @@ func clusterAdd(id int, address string, timeout time.Duration, cluster []string)
 	}
 	if address == "" {
 		return errors.New("address cannot be blank")
-		//address = fmt.Sprintf("127.0.0.1:918%d", id)
 	}
 	info := dqclient.NodeInfo{
 		ID:      uint64(id),
@@ -255,10 +249,10 @@ func clusterAdd(id int, address string, timeout time.Duration, cluster []string)
 
 const defaultNetworkLatency = 20 * time.Millisecond
 
-// listen for SIGUSR1 and dump cluster info to log
+// listen for SIGUSR2 and dump cluster info to log
 func dumper(client *dqclient.Client) {
 	ch := make(chan os.Signal)
-	signal.Notify(ch, syscall.SIGUSR1)
+	signal.Notify(ch, syscall.SIGUSR2)
 
 	go func(cc chan os.Signal) {
 		ctx := context.Background()
@@ -282,76 +276,3 @@ func dumper(client *dqclient.Client) {
 		}
 	}(ch)
 }
-
-func dbStart(id int, dir, address, filename string, cluster ...string) error {
-	if id == 0 {
-		return fmt.Errorf("ID must be greater than zero")
-	}
-	if address == "" {
-		address = fmt.Sprintf("127.0.0.1:918%d", id)
-		log.Printf("using default address: %q\n", address)
-	}
-	log.Printf("starting node: %d -- listening on %q\n", id, address)
-	dir = filepath.Join(dir, fmt.Sprint(id))
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return errors.Wrapf(err, "can't create dir %s", dir)
-	}
-	node, err := dqlite.New(
-		uint64(id), address, dir,
-		dqlite.WithBindAddress(address),
-		dqlite.WithNetworkLatency(defaultNetworkLatency),
-		//dqlite.WithLogFunc(logFunc),
-	)
-	if err != nil {
-		return errors.Wrap(err, "failed to create node")
-	}
-	if err := node.Start(); err != nil {
-		return errors.Wrap(err, "failed to start node")
-	}
-
-	const timeout = time.Second * 60
-	client, err := getLeader(timeout, cluster)
-	if err != nil {
-		return errors.Wrap(err, "can't connect to cluster leader")
-	}
-	dumper(client)
-	ch := make(chan os.Signal)
-	signal.Notify(ch, syscall.SIGINT)
-	signal.Notify(ch, syscall.SIGTERM)
-	sig := <-ch
-
-	log.Printf("server id: %d is shutting down on signal: %v\n", id, sig)
-
-	if err := client.Remove(context.Background(), uint64(id)); err != nil {
-		log.Printf("error removing cluster id:%d error:%v\n", id, err)
-	}
-	if err := node.Close(); err != nil {
-		return errors.Wrap(err, "failed to stop node")
-	}
-	log.Printf("server id: %d has shut down\n", id)
-
-	return nil
-}
-
-/*
-func seeker(dbName, statement string, pause time.Duration, cluster ...string) error {
-	db, err := getDB(dbName, cluster)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	for {
-		value, err := queryColumn(db, statement)
-		if err == nil {
-			log.Println(value)
-		} else {
-			log.Println("query error:", err)
-		}
-		time.Sleep(pause)
-	}
-
-	return nil
-}
-*/

@@ -35,7 +35,7 @@ func EnableDatabase(enable bool) {
 	dbxDisabled = !enable
 }
 
-func (dx *dbx) query(statement string, args ...interface{}) error {
+func (dx *DBX) query(statement string, args ...interface{}) error {
 	if dbxDisabled {
 		return ErrDatabaseUnavailable
 	}
@@ -160,7 +160,7 @@ func getDB(dbName string, cluster []string) (*sql.DB, error) {
 }
 
 /*
-func getDBX(dbName string, cluster []string) *dbx {
+func getDBX(dbName string, cluster []string) *DBX {
 	db, err := getDB(dbName, cluster)
 	if err != nil {
 		log.Fatalln(err)
@@ -169,13 +169,15 @@ func getDBX(dbName string, cluster []string) *dbx {
 }
 */
 
-// all purpose wrapper to read/write a single sql statement
-func (dx *dbx) Eval(statement string) error {
+// Eval executes a single read/write query
+func (dx *DBX) Eval(statement string) error {
 	if statement == "" {
 		return fmt.Errorf("no statements given")
 	}
 	// TODO: add additional sqlite cli commands
 	switch statement {
+	case ".schema":
+		statement = "select sql || ';' from sqlite_master"
 	case ".tables":
 		statement = "select name from sqlite_master where type='table' order by name"
 	}
@@ -196,7 +198,7 @@ func (dx *dbx) Eval(statement string) error {
 }
 
 // execute a write statement against the database
-func (dx *dbx) exec(query string, args ...interface{}) (result sql.Result, err error) {
+func (dx *DBX) exec(query string, args ...interface{}) (result sql.Result, err error) {
 	const retryLimit = 10 // TODO: make configurable
 	dx.mu.Lock()
 	defer dx.mu.Unlock()
@@ -209,7 +211,7 @@ func (dx *dbx) exec(query string, args ...interface{}) (result sql.Result, err e
 		if result, err = dx.db.Exec(query, args...); err == nil {
 			return
 		}
-		log.Printf("dbx exec (%d/%d::%T) err: %v\n", i+1, retryLimit, err, err)
+		log.Printf("DBX exec (%d/%d::%T) err: %v\n", i+1, retryLimit, err, err)
 		if derr, ok := err.(driver.Error); ok {
 			// don't retry if its an actual sql failure
 			if derr.Code > 0 {
@@ -221,7 +223,7 @@ func (dx *dbx) exec(query string, args ...interface{}) (result sql.Result, err e
 		delay += delay
 
 	}
-	err = errors.Wrapf(err, "dbx exec fail")
+	err = errors.Wrapf(err, "DBX exec fail")
 	return
 }
 
@@ -231,7 +233,8 @@ type Queryor interface {
 	Close() error
 }
 
-type dbx struct {
+// DBX is the database handler used by dqlited
+type DBX struct {
 	name    string
 	db      *sql.DB
 	mu      sync.RWMutex // TODO: not using Read locks for queries...yet (is it necessary?)
@@ -241,18 +244,19 @@ type dbx struct {
 	verbose bool
 }
 
-// NewDbx returns a new dbx struct (TODO: only expose NewConnection?)
-func NewDbx(db *sql.DB, name string) *dbx {
-	return &dbx{db: db, name: name, w: os.Stdout, header: true}
+// NewDbx returns a new DBX struct (TODO: only expose NewConnection?)
+func NewDbx(db *sql.DB, name string) *DBX {
+	return &DBX{db: db, name: name, w: os.Stdout, header: true}
 }
 
 // NewConnection return a db connection
-func NewConnection(dbName string, cluster []string) (*dbx, error) {
+func NewConnection(dbName string, cluster []string) (*DBX, error) {
 	db, err := getDB(dbName, cluster)
 	return NewDbx(db, dbName), err
 }
 
-func (dx *dbx) Close() error {
+// Close will close the open database connection
+func (dx *DBX) Close() error {
 	dbxMu.Lock()
 	defer dbxMu.Unlock()
 	delete(dbxDB, dx.name)
@@ -260,7 +264,8 @@ func (dx *dbx) Close() error {
 	return dx.db.Close()
 }
 
-func (dx *dbx) QueryRows(query string, args ...interface{}) ([]Rows, error) {
+// QueryRows returns the rows of a a query
+func (dx *DBX) QueryRows(query string, args ...interface{}) ([]Rows, error) {
 	log.Printf("QUERY: %s ARGS: %v\n", query, args)
 	reply := make([]Rows, 0, 32)
 	action := strings.ToUpper(strings.Fields(query)[0])
@@ -335,7 +340,7 @@ type Executor interface {
 
 // Execute will execute a series of statements, exec and query
 // TODO: consolidate with Batch?
-func (dx *dbx) Execute(statements ...string) (*ExecuteResponse, error) {
+func (dx *DBX) Execute(statements ...string) (*ExecuteResponse, error) {
 	dx.mu.Lock()
 	defer dx.mu.Unlock()
 
@@ -346,7 +351,7 @@ func (dx *dbx) Execute(statements ...string) (*ExecuteResponse, error) {
 		resp, err := dx.db.Exec(statement)
 		if err != nil {
 			log.Printf("EXEC FAIL FOR: %q -- %v\n", statement, err)
-			return nil, errors.Wrapf(err, "dbx.Execute fail (%d/%d): %q", i+1, len(statements), statement)
+			return nil, errors.Wrapf(err, "DBX.Execute fail (%d/%d): %q", i+1, len(statements), statement)
 		}
 		lastID, _ := resp.LastInsertId()
 		affected, _ := resp.RowsAffected()
@@ -440,7 +445,7 @@ func liner(r io.ReadCloser) chan string {
 }
 
 // loadFile will apply the given file to the current database
-func (dx *dbx) loadFile(fileName string, batched bool) error {
+func (dx *DBX) loadFile(fileName string, batched bool) error {
 	if dx.verbose {
 		log.Println("loading file:", fileName)
 	}
@@ -459,7 +464,7 @@ func (dx *dbx) loadFile(fileName string, batched bool) error {
 	return dx.Batch(string(buffer))
 }
 
-func (dx *dbx) queryFile(fileName string) error {
+func (dx *DBX) queryFile(fileName string) error {
 	dx.mu.Lock()
 	defer dx.mu.Unlock()
 	buffer, err := ioutil.ReadFile(fileName)
@@ -529,7 +534,7 @@ func CleanText(s string) string {
 // Normally statements are terminated by ";" but this is complicated
 // by trigger statements which include one or more statements with
 // their own ";" occurances between the BEGIN and END
-func (dx *dbx) Batch(buffer string) error {
+func (dx *DBX) Batch(buffer string) error {
 	w := dx.w
 	if w == nil {
 		w = os.Stdout

@@ -81,7 +81,7 @@ dtest:
 	docker build --build-arg release=$(RELEASE) -t $(IMG) -f Dockerfile.test .
 
 # our docker-compose targets
-.PHONY: down up restart ps top bastion cluster clu bounce status comptest d1 d2 net log
+.PHONY: down up restart ps top bastion clu bounce status comptest d1 d2 net log
 
 log:
 	@$(COMPOSE) logs
@@ -124,9 +124,6 @@ top:
 bastion:
 	@$(COMPOSE) exec bastion bash
 
-cluster:
-	@$(COMPOSE) exec bastion ./dqlited cluster
-
 kill:
 	@pkill dqlited || :
 
@@ -145,7 +142,7 @@ watch:
 	@scripts/active.sh -w
 
 moar:
-	@scripts/start.sh 4 5
+	@DQLITED_ROLE=voter scripts/start.sh 4 5
 
 q:
 	@./dqlited adhoc "select * from model"
@@ -160,7 +157,7 @@ start:
 	@scripts/start.sh
 
 status: ## show cluster status
-	@scripts/exec.sh ./dqlited cluster
+	@scripts/exec.sh ./dqlited status
 
 prep:
 	@scripts/prep.sh
