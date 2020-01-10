@@ -66,7 +66,6 @@ func (dx *DBX) stretch(count int) {
 }
 
 func hammer(id, count int, dbName string, cluster ...string) {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	dx, err := NewConnection(dbName, cluster)
 	if err != nil {
 		log.Fatalln(err)

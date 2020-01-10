@@ -52,6 +52,26 @@ func Transfer(id uint64, timeout time.Duration, cluster []string) error {
 	return client.Transfer(ctx, id)
 }
 
+// exists checks to see if the node already exists
+func exists(client *dqclient.Client, id uint64, address string) bool {
+	ctx := context.Background() // TODO: timeout needed (better -- pass ctx in)
+	nodes, err := client.Cluster(ctx)
+	if err != nil {
+		panic(errors.Wrap(err, "can't get cluster"))
+	}
+
+	for _, node := range nodes {
+		if node.ID == id {
+			if address != node.Address {
+				const msg = "mismatched addresses for node: %d (%q vs. %q)"
+				panic(fmt.Sprintf(msg, id, address, node.Address))
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // TODO: make id a uint64 and stop casting inside function
 func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout time.Duration, cluster ...string) error {
 	if id == 0 {
@@ -107,6 +127,12 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
 	if add {
+		if exists(client, uint64(id), address) {
+			log.Printf("node %d (%s) previously added. Skipping add", id, address)
+			add = false
+		}
+	}
+	if add {
 		info := dqclient.NodeInfo{
 			ID:      uint64(id),
 			Address: address,
@@ -134,14 +160,17 @@ func nodeStart(id int, role NodeRole, add bool, dir, address string, timeout tim
 		bye := <-sig
 		log.Printf("server id: %d is shutting down on signal: %v\n", id, bye)
 
-		if err := client.Remove(context.Background(), uint64(id)); err != nil {
-			log.Printf("error removing cluster id:%d error:%v\n", id, err)
-		} else {
-			log.Printf("removed self from cluster (id:%d)\n", id)
-		}
-		if err := node.Close(); err != nil {
-			log.Println("failed to stop node:", err)
-		}
+		/*
+			// Check if leader and transfer if we are
+			if err := client.Remove(context.Background(), uint64(id)); err != nil {
+				log.Printf("error removing cluster id:%d error:%v\n", id, err)
+			} else {
+				log.Printf("removed self from cluster (id:%d)\n", id)
+			}
+			if err := node.Close(); err != nil {
+				log.Println("failed to stop node:", err)
+			}
+		*/
 		log.Printf("server id: %d has shut down\n", id)
 		os.Exit(0)
 	}()

@@ -33,11 +33,13 @@ build:	fmt 	## build the server executable
 static:	## build a statically linked binary
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags libsqlite3 -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
 
-.PHONY: kill local redo depends
+.PHONY: kill local redo depends rerun
 
 depends: /opt/build/scripts/build_dqlited all
 
 redo:	build kill clean start
+
+rerun:	kill watch start prep moar
 
 local:
 	@./local

@@ -31,10 +31,6 @@ type Response struct {
 	Time    float64     `json:"time,omitempty"`
 }
 
-func init() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Llongfile)
-}
-
 func myIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {

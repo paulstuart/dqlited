@@ -1,4 +1,4 @@
-# dqlited
+# dqlited [![GoDoc](https://godoc.org/github.com/paulstuart/dqlited?status.svg)](http://godoc.org/github.com/paulstuart/dqlited)[![Build Status](https://travis-ci.com/paulstuart/dqlited.svg?branch=master)](https://travis-ci.com/paulstuart/dqlited)
 
 A tool for running dqlite
 
