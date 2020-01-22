@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -8,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -34,8 +34,7 @@ type Response struct {
 func myIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		os.Stderr.WriteString("Oops: " + err.Error() + "\n")
-		os.Exit(1)
+		panic(err)
 	}
 
 	for _, a := range addrs {
@@ -46,27 +45,6 @@ func myIP() string {
 		}
 	}
 	panic("no IP address for you!")
-}
-
-// StartServer provides a web interface to the database
-// No error to return as it's never intended to stop
-// TODO: too many args, consolidate into config struct
-func StartServer(id int, skip bool, port int, dbname, dir, address, roleName string, timeout time.Duration, cluster []string) {
-	log.Printf("starting server node :%d (%s) dir: %q ip:%s\n", id, roleName, dir, myIP())
-	role, err := nodeRole(roleName)
-	if err != nil {
-		panic(err)
-	}
-	if err := nodeStart(id, role, !skip, dir, address, timeout, cluster...); err != nil {
-		panic(err)
-	}
-	log.Printf("setting up handlers for database: %s\n", dbname)
-	handlers, err := setupHandlers(dbname, cluster)
-	if err != nil {
-		panic(err)
-	}
-	log.Printf("starting webserver port: %d\n", port)
-	webServer(port, handlers...)
 }
 
 func faviconPage() http.HandlerFunc {
@@ -83,33 +61,62 @@ func webServer(port int, handlers ...WebHandler) {
 	http.HandleFunc("/favicon.ico", faviconPage())
 
 	httpServer := fmt.Sprintf(":%d", port)
-	fmt.Printf("serve up web: http://%s%s/\n", myIP(), httpServer)
+	log.Printf("serve up web: http://%s%s/\n", myIP(), httpServer)
 	err := ListenAndServe(httpServer, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func setupHandlers(dbname string, cluster []string) ([]WebHandler, error) {
-	x, err := NewConnection(dbname, cluster)
+func setupHandlers(ctx context.Context, dbname string, cluster []string) ([]WebHandler, error) {
+	dx, err := NewConnection(ctx, dbname, cluster, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to make queryer")
 	}
-	return makeHandlers(x, x), nil
-}
-
-func makeHandlers(exec Executor, query Queryor) []WebHandler {
 	return []WebHandler{
-		{"/db/execute", makeHandleExec(exec)},
-		{"/db/query", makeHandleQuery(query)},
+		{"/db/execute", makeHandleExec(dx)},
+		{"/db/query", makeHandleQuery(dx)},
+		{"/status", makeHandleStatus(cluster)},
 		{"/", homePage},
-	}
+	}, nil
 }
 
 func homePage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("nothing to see here\n"))
 }
 
+func statusPage(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("nothing to see here\n"))
+}
+
+type nodeStatus struct {
+	ID      uint64
+	Address string
+	Role    string
+}
+
+func makeHandleStatus(cluster []string) http.HandlerFunc {
+	fn := statusFunc(cluster)
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodes, err := fn()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			status := make([]nodeStatus, len(nodes))
+			for i, node := range nodes {
+				status[i] = nodeStatus{
+					node.ID,
+					node.Address,
+					node.Role.String(),
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			enc := json.NewEncoder(w)
+			enc.SetIndent("", "  ")
+			enc.Encode(status)
+		}
+	}
+}
 func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
 	enc := json.NewEncoder(w)
 	if pretty, _ := isPretty(r); pretty {
@@ -147,7 +154,6 @@ func makeHandleExec(exec Executor) http.HandlerFunc {
 func makeHandleQuery(queryor Queryor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		// TODO: add perm check and timing
 		if r.Method != "GET" && r.Method != "POST" {
 			log.Printf("invalid method: %q\n", r.Method)
 			w.WriteHeader(http.StatusMethodNotAllowed)

@@ -52,6 +52,8 @@ RUN apt-get install -y 	\
 	wamerican	\
 	vim
 
+RUN ln -sf /usr/share/zoneinfo/US/Pacific /etc/localtime
+
 ######################################################################################
 #
 # create an image for building dqlite from scratch
@@ -96,6 +98,8 @@ RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
 
 RUN go get -u golang.org/x/lint/golint
 
+RUN go get -u github.com/go-delve/delve/cmd/dlv
+
 # make gdb happier with Go
 RUN echo "add-auto-load-safe-path /usr/local/go/src/runtime/runtime-gdb.py" >> /root/.gdbinit
 
@@ -112,6 +116,9 @@ RUN vim +GoInstallBinaries +qall
 # TODO: move this up to base-os
 RUN echo "alias vi='vim'" >> ~/.bash_aliases
 
+# lets use local time for developing
+
+RUN ln -sf /usr/share/zoneinfo/US/Pacific /etc/localtime
 ######################################################################################
 #
 # create an image for building dqlite from scratch
@@ -164,6 +171,7 @@ RUN scripts/sources.sh .
 WORKDIR /root/go/src/github.com/paulstuart/dqlited/
 
 #TESTING
+RUN  rm -f *.go
 COPY . /root/go/src/github.com/paulstuart/dqlited/
 
 #TESTING

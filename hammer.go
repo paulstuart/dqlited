@@ -1,144 +1,198 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+	"io"
 	"log"
-	"math/rand"
+	"net"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
-	"github.com/paulstuart/envy"
-	"github.com/spf13/cobra"
+	"github.com/pkg/errors"
 )
 
-const (
-	insert = "insert into conflicted (server, msg, given) values(?, ?, ?)"
-	upsert = "insert into overlay (server, msg, given) values(?, ?, ?)"
-	simple = "insert into simple (server) values(?)"
-	remove = "delete from simple where id=?"
-)
-
-// run a load test against the database
-func newHammer() *cobra.Command {
-	var cluster []string
-	var dbName string
-	var id int
-	var count int
-
-	cmd := &cobra.Command{
-		Use:   "hammer",
-		Short: "load test the database.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			hammer(id, count, dbName, cluster...)
-			return nil
-		},
+func hammerPrep(db *sql.DB) error {
+	const drop = "drop table if exists simple"
+	const create = "create table simple (id integer primary key, other integer)"
+	if _, err := db.Exec(drop); err != nil {
+		return err
 	}
-
-	flags := cmd.Flags()
-	flags.StringSliceVarP(&cluster, "cluster", "c", clusterList(), "addresses of existing cluster nodes")
-	flags.StringVarP(&dbName, "database", "d", envy.StringDefault("DQLITED_DB", defaultDatabase), "name of database to use")
-	flags.IntVarP(&count, "count", "n", 0, "how many times to repeat (0 is infinite)")
-	flags.IntVarP(&id, "id", "i", envy.IntDefault("DQLITED_ID", 1), "server id")
-
-	return cmd
+	_, err := db.Exec(create)
+	return err
 }
 
-func (dx *DBX) stretch(count int) {
+type stackTracer interface {
+	StackTrace() errors.StackTrace
+}
+
+func hammerInserts(count int) string {
+	var buf strings.Builder
+	buf.WriteString("drop table if exists simple;\n")
+	buf.WriteString("create table simple (id integer primary key, other integer)")
+	for i := 1; i <= count; i++ {
+		buf.WriteString(fmt.Sprintf("insert into simple (other) values(%d)", i))
+	}
+	return buf.String()
+}
+
+func hammerExec(db *sql.DB, count int) {
+	done := false
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		bye := <-sig
+		log.Printf("hammer is shutting down on signal: %v\n", bye)
+		done = true
+	}()
+	const timeOut = "2006/01/02 03:04:05.000000PM -0700"
+	var now string
+	var fails, good, last int
+
+	started := time.Now().Local()
+	fmt.Printf("%s starting\n", started.Format(timeOut))
 	for i := 0; i < count; i++ {
-		res, err := dx.exec(simple, i)
-		if err != nil {
-			panic(err)
+		if done {
+			break
 		}
-		rowid, err := res.LastInsertId()
+		const insert = "insert into simple (other) values(?)"
+		resp, err := db.Exec(insert, last+1)
 		if err != nil {
-			panic(err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			panic(err)
-		}
+			// first err (in a series?)
+			fails++
+			var nerr net.Error
+			if errors.Is(err, io.EOF) {
+				fmt.Println("End of the line, wait it out")
+				time.Sleep(time.Second)
+				continue
+			} else if errors.As(err, &nerr) {
+				fmt.Printf("network error!!! timeout:%t temp:%t msg:%s\n", nerr.Timeout(), nerr.Temporary(), err)
+				continue
+			}
+			if fails == 1 {
+				now = time.Now().Format(timeOut)
+			} else {
+				// reprint on same line to make real-time viewing easier
+				if (fails % 10) == 0 {
+					fmt.Print(" pause for a second...")
+					time.Sleep(time.Second)
+				}
+				fmt.Printf("\r")
+			}
+			if false {
+				if err, ok := err.(stackTracer); ok {
+					st := err.StackTrace()
+					fmt.Printf("DANGIT: %+v", st) // top two frames
+				} else {
+					fmt.Printf("err (%T) is not a stack tracer\n", err)
+				}
+			}
 
-		_, err = dx.exec(remove, rowid)
-		if err != nil {
-			panic(err)
+			cause := errors.Cause(err)
+			if sqlErr, ok := cause.(SqliteError); ok {
+				code, msg := sqlErr.SqliteError()
+				fmt.Printf("Erp! SqliteError (%d): %s\n", code, msg)
+			} else {
+				fmt.Printf("%s fails: %3d (%d/%d):%T %-30s", now, fails, i, count, cause, err.Error())
+			}
+			continue
 		}
-		log.Printf("OK %s - %d / %d\n", simple, rowid, affected)
+		if id, err := resp.LastInsertId(); err != nil {
+			fmt.Printf("%s failed to get insert id: %+v\n", now, err)
+			continue
+		} else {
+			last = int(id)
+		}
+		good++
+		if last != good {
+			fmt.Printf("%s offby: (%d/%d)\n", now, last, good)
+			good = last // reset to avoid repeating same error
+		}
+		if fails > 0 {
+			fmt.Printf("\n%s fixed: (%d/%d)\n", now, good, count)
+			fails = 0
+			continue
+		}
+		// visual reminder we're good
+		if (good % 1000) == 0 {
+			now = time.Now().Format(timeOut)
+			fmt.Printf("%s  good: (%d/%d)\n", now, good, count)
+		}
 	}
+	delta := time.Now().Sub(started)
+	total := good + fails
+	per := delta / time.Duration(total)
+	fmt.Printf("completed %d/%d (%s/insert)\n", good, total, per)
 }
 
-func hammer(id, count int, dbName string, cluster ...string) {
-	dx, err := NewConnection(dbName, cluster)
+func hammer(id, count int, logger LogFunc, dbName string, cluster ...string) {
+	ctx := context.Background()
+	dx, err := NewConnection(ctx, dbName, cluster, logger)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	log.Printf("connected (%d)\n", id)
+	log.Println("hammer connected")
 	defer dx.db.Close()
-
-	log.Println("strech count:", count)
-	dx.stretch(count)
-	log.Println("streched")
-	/*
-		fails := 0
-			retry:
-				if _, err := db.Exec(insert, id, "-none-", time.Now()); err != nil {
-					log.Printf("insert error (%d/%d): %+v\n", id, fails, err)
-					if fails++; fails < 5 {
-						time.Sleep(time.Second)
-						goto retry
-					}
-					log.Fatalf("I give up (%d)\n", id)
-				}
-	*/
-	started := time.Now()
-	fmt.Println("STARTING COUNT:", count)
-	starting := count
-	last := 0
-	var total int64
-
-	if starting > 0 {
-		defer func() {
-			//delta := time.Duration((time.time.Now().Sub(started).Nanoseconds() / count) * time.Nanosecond)
-			delta := time.Now().Sub(started).Nanoseconds()
-			//log.Printf("Averaged rate per exec: %s\n", time.Now().Sub(started)/count)
-			rate := time.Duration(delta / int64(starting))
-			//log.Printf("Averaged rate per exec: %s\n", time.Duration(delta/count))
-			log.Printf("completed %d/%d -- average rate per exec: %s\n", total, last, rate)
-			//log.Printf("Averaged rate per exec: %s\n", rate)
-		}()
+	if err := hammerPrep(dx.db); err != nil {
+		log.Fatalln(err)
 	}
+	hammerTime(dx.db, count)
+	//hammerExec(dx.db, count)
+}
 
-	for {
-		msg := "nada"
-		if false {
-			delay := rand.Intn(100)
-			msg = fmt.Sprintf("delay: %dms", delay)
-			time.Sleep(time.Millisecond * time.Duration(delay))
-			print(msg)
+func ts() string {
+	const timeOut = "2006/01/02 03:04:05.000000PM -0700"
+	return time.Now().Local().Format(timeOut)
+}
+
+func hammerTime(db *sql.DB, count int) {
+	// get sub-second resolution
+	const timeOut = "2006/01/02 03:04:05.000000PM -0700"
+	var now string
+	var fails, good, last int
+
+	started := time.Now().Local()
+	fmt.Printf("%s starting\n", started.Format(timeOut))
+	for i := 0; i < count; i++ {
+		const insert = "insert into simple (other) values(?)"
+		resp, err := db.Exec(insert, last+1)
+		if err != nil {
+			fails++
+			// first err (in a series?)
+			if fails == 1 {
+				now = time.Now().Format(timeOut)
+
+			}
+			fmt.Printf("%s fails: %3d (%d/%d):%T %-30s", now, fails, i, count, err, err.Error())
+			continue
 		}
-		//if _, err := db.Exec(upsert, id, msg, time.Now()); err != nil {
-		//if _, err := db.Exec(simple, id); err != nil {
-		//log.Println("exec:", simple, id)
-		if r, err := dx.exec(simple, id); err != nil {
-			log.Printf("hammer (%d) exec error : %+v\n", id, err)
+		if id, err := resp.LastInsertId(); err != nil {
+			fmt.Printf("%s failed to get insert id: %+v\n", now, err)
+			continue
 		} else {
-			if affected, err := r.RowsAffected(); err == nil {
-				total += affected
-			}
-			/*
-				if err != nil {
-					log.Println("hammer rows error:", err)
-				} else {
-					log.Println("hammer rows affected:", affected)
-				}
-			*/
+			last = int(id)
 		}
-		last++
-		if count > 0 {
-			count--
-			//log.Printf("completed %d/%d\n", starting-count, starting)
-			if count == 0 {
-				break
-			}
+		if fails > 0 {
+			fmt.Printf("\n%s fixed: (%d/%d)\n", ts(), good, count)
+			fails = 0
+		}
+		good++
+		if last != good {
+			fmt.Printf("%s offby: (%d/%d)\n", ts(), last, good)
+			good = last // reset to avoid repeating same error
+		}
+		// visual reminder we're good
+		if (good % 1000) == 0 {
+			now = time.Now().Format(timeOut)
+			fmt.Printf("%s  good: (%d/%d)\n", ts(), good, count)
 		}
 	}
-	log.Printf("completed %d/%d\n", total, last)
+	delta := time.Now().Sub(started)
+	total := good + fails
+	per := delta / time.Duration(total)
+	fmt.Printf("\ncompleted %d/%d (%s/insert)\n", good, total, per)
 }

@@ -5,7 +5,8 @@ say() { printf "\n$*\n\n"; }
 libuv() {
 say "building libuv"
 cd libuv
-git checkout v1.34.0 # latest version as of now
+git pull
+git checkout v1.34.1 # latest version as of now
 sh autogen.sh
 ./configure && make -j && make install
 cd -

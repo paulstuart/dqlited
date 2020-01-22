@@ -5,7 +5,8 @@ VERSION = $(shell date '+%Y%m%d.%H:%M:%S') # version our executable with a times
 # docker mac stable as of 2020/01/07 is kernel 4.9.184, 
 # so let's not use bionic until docker updates (or we move to edge)
 # bionic uses kernel 4.15.0.74.76
-RELEASE = xenial
+#RELEASE = xenial
+RELEASE = bionic
 
 IMG     = paulstuart/dqlited:$(RELEASE)
 GIT     = /root/go/src/github.com
@@ -33,13 +34,18 @@ build:	fmt 	## build the server executable
 static:	## build a statically linked binary
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags libsqlite3 -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
 
-.PHONY: kill local redo depends rerun
+.PHONY: kill local redo depends rerun triad tz
 
-depends: /opt/build/scripts/build_dqlited all
+tz:
+	ln -sf /usr/share/zoneinfo/US/Pacific /etc/localtime
+
+depends: 
+	/opt/build/scripts/build_dqlite.sh all
 
 redo:	build kill clean start
 
-rerun:	kill watch start prep moar
+triad::	kill watch start
+rerun:	kill clean watch start prep moar
 
 local:
 	@./local
@@ -48,7 +54,17 @@ demo: kill watch start prep ## demonstrate the cluster bring up and fault tolera
 	
 # docker build targets
 
-.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest hey
+.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest hey dangling dangle timeout tcp
+
+timeout:
+	echo 1 > /proc/sys/net/ipv4/tcp_fin_timeout
+
+tcp:
+	cat /proc/sys/net/ipv4/tcp_fin_timeout
+
+dangle:	dangling
+dangling:
+	@docker rmi -f $(docker images -f "dangling=true" -q)
 
 hey:
 	echo RELEASE: $(RELEASE)
@@ -193,8 +209,8 @@ run:
 		$(IMG) bash
 
 
-#DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183,127.0.0.1:9184,127.0.0.1:9185"
-DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183"
+DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183,127.0.0.1:9184,127.0.0.1:9185"
+#DOCKER_CLUSTER = "127.0.0.1:9181,127.0.0.1:9182,127.0.0.1:9183"
 LOCAL_CLUSTER = "@/tmp/dqlited.1.sock,@/tmp/dqlited.2.sock,@/tmp/dqlited.3.sock"
 
 # run docker with my forks mounted over originals
@@ -234,10 +250,12 @@ udev:
 		paulstuart/ubuntu-dev:$(RELEASE) bash
 
 # dev image with local forks mounted in place of originals
+# expose port 6060 to share local go docs
 dq:
 	docker run \
 		-it --rm \
 		-p 4001:4001 \
+		-p 6060:6060 \
 		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
 		--privileged								\
 		--workdir $(MNT) 							\
