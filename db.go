@@ -15,28 +15,121 @@ import (
 	"text/tabwriter"
 	"time"
 
-	//"github.com/canonical/go-dqlite/client"
+	"github.com/canonical/go-dqlite/client"
 	"github.com/canonical/go-dqlite/driver"
 	"github.com/pkg/errors"
 )
 
 var (
-	dbxMu       sync.Mutex
-	dbxDB       = make(map[string]*sql.DB)
-	dbxDisabled bool // circuit breaker switch
+	dbxMu        sync.Mutex
+	dbxDB        = make(map[string]*sql.DB)
+	dbxDisableMu sync.Mutex // circuit breaker switch
+	dbxDisabled  bool       // circuit breaker switch
 
 	// ErrDatabaseUnavailable is returned if the database is unavailable
 	ErrDatabaseUnavailable = errors.New("database is unavailable")
 )
 
 // EnableDatabase controls the database circuit breaker
-// TODO: is a race condition really a blocker (by not mutexing access to dbxDisabled)?
 func EnableDatabase(enable bool) {
+	dbxDisableMu.Lock()
+	defer dbxDisableMu.Unlock()
 	dbxDisabled = !enable
 }
 
+// DatabaseDisabled indicates circuit breaker is set
+func DatabaseDisabled() bool {
+	dbxDisableMu.Lock()
+	defer dbxDisableMu.Unlock()
+	return dbxDisabled
+}
+
+type QDB interface {
+	Header([]string)
+	Body([]interface{})
+	Close()
+}
+
+type DBTW struct {
+	tw    *tabwriter.Writer
+	multi bool
+}
+
+func (d *DBTW) Header(columns []string) {
+	if d.multi {
+		d.tw.Flush()
+	}
+	d.multi = true
+	for i, column := range columns {
+		if i > 0 {
+			fmt.Fprint(d.tw, "\t")
+		}
+		fmt.Fprint(d.tw, column)
+	}
+	fmt.Fprintln(d.tw)
+	for i, column := range columns {
+		if i > 0 {
+			fmt.Fprint(d.tw, "\t")
+		}
+		fmt.Fprint(d.tw, strings.Repeat("-", len(column)))
+	}
+}
+
+func (d *DBTW) Body(buffer []interface{}) {
+	for i, column := range buffer {
+		if i > 0 {
+			fmt.Fprint(d.tw, "\t")
+		}
+		fmt.Fprint(d.tw, column)
+	}
+	fmt.Fprintln(d.tw)
+}
+
+func (d *DBTW) Close() {
+	d.tw.Flush()
+}
+
+var _ QDB = (*DBTW)(nil)
+
+func (dx *DBX) queryer(qdb QDB, statement string, args ...interface{}) error {
+	if DatabaseDisabled() {
+		return ErrDatabaseUnavailable
+	}
+	rows, err := dx.db.Query(statement)
+	if err != nil {
+		return errors.Wrap(err, "dbx query failed")
+	}
+
+	defer qdb.Close()
+	for {
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		qdb.Header(columns)
+
+		buffer := make([]interface{}, len(columns))
+		scanTo := make([]interface{}, len(columns))
+		for i := range buffer {
+			scanTo[i] = &buffer[i]
+		}
+		for rows.Next() {
+			if err := rows.Scan(scanTo...); err != nil {
+				return errors.Wrap(err, "failed to scan row")
+			}
+			qdb.Body(scanTo)
+		}
+		if !rows.NextResultSet() {
+			break
+		}
+	}
+
+	return nil
+}
+
 func (dx *DBX) query(statement string, args ...interface{}) error {
-	if dbxDisabled {
+	if DatabaseDisabled() {
 		return ErrDatabaseUnavailable
 	}
 	if dx.w == nil {
@@ -63,11 +156,6 @@ func (dx *DBX) query(statement string, args ...interface{}) error {
 			flags, // behavior flags
 		)
 		columns, _ := rows.Columns()
-		buffer := make([]interface{}, len(columns))
-		scanTo := make([]interface{}, len(columns))
-		for i := range buffer {
-			scanTo[i] = &buffer[i]
-		}
 
 		if dx.header {
 			for i, column := range columns {
@@ -86,6 +174,11 @@ func (dx *DBX) query(statement string, args ...interface{}) error {
 			fmt.Fprintln(tw)
 		}
 
+		buffer := make([]interface{}, len(columns))
+		scanTo := make([]interface{}, len(columns))
+		for i := range buffer {
+			scanTo[i] = &buffer[i]
+		}
 		for rows.Next() {
 			if err := rows.Scan(scanTo...); err != nil {
 				tw.Flush()
@@ -118,8 +211,8 @@ func queryColumn(db *sql.DB, statement string, args ...interface{}) (string, err
 }
 
 // run a single command and print its results
-func dbCmd(ctx context.Context, dbName string, cluster []string, header, divs bool, statement string) error {
-	dx, err := NewConnection(ctx, dbName, cluster, nil)
+func dbCmd(ctx context.Context, dbName string, cluster []string, logger client.LogFunc, header, divs bool, statement string) error {
+	dx, err := NewConnection(ctx, dbName, cluster, logger)
 	if err != nil {
 		return err
 	}
@@ -129,7 +222,7 @@ func dbCmd(ctx context.Context, dbName string, cluster []string, header, divs bo
 	return dx.Eval(statement)
 }
 
-func getDB(ctx context.Context, dbName string, cluster []string, logger LogFunc) (*sql.DB, error) {
+func getDB(ctx context.Context, dbName string, cluster []string, logger client.LogFunc) (*sql.DB, error) {
 	dbxMu.Lock()
 	defer dbxMu.Unlock()
 	if db, ok := dbxDB[dbName]; ok {
@@ -138,8 +231,7 @@ func getDB(ctx context.Context, dbName string, cluster []string, logger LogFunc)
 	store := getStore(ctx, cluster)
 	if len(dbxDB) == 0 {
 		if logger == nil {
-			//logger = NewLogFunc(defaultLogLevel, "DQLclient: ", log.Writer())
-			logger = NewLogFunc(defaultLogLevel, "DQLclient: ", log.Writer())
+			logger = client.DefaultLogFunc
 		}
 		logOpt := driver.WithLogFunc(logger)
 		dbDriver, err := driver.New(store, logOpt)
@@ -153,6 +245,7 @@ func getDB(ctx context.Context, dbName string, cluster []string, logger LogFunc)
 	if err == nil {
 		dbxDB[dbName] = db
 	}
+	db.SetMaxOpenConns(1) // dqlite is single-threaded
 	return db, err
 }
 
@@ -189,14 +282,12 @@ func (dx *DBX) Eval(statement string) error {
 
 // execute a write statement against the database
 func (dx *DBX) exec(query string, args ...interface{}) (result sql.Result, err error) {
-	if dbxDisabled {
+	if DatabaseDisabled() {
 		err = ErrDatabaseUnavailable
 		return
 	}
 
 	const retryLimit = 10 // TODO: make configurable
-	dx.mu.Lock()
-	defer dx.mu.Unlock()
 	delay := time.Millisecond
 	for i := 0; i < retryLimit; i++ {
 		if result, err = dx.db.Exec(query, args...); err == nil {
@@ -231,11 +322,8 @@ type SqliteError interface {
 
 // DBX is the database handler used by dqlited
 type DBX struct {
-	mu    sync.RWMutex // TODO: not using Read locks for queries...yet (is it necessary (at all)?)
-	db    *sql.DB
-	name  string
-	users int
-	// TODO: remove items below, as they should be on a per-session basis
+	db      *sql.DB
+	name    string
 	w       io.Writer
 	header  bool
 	lines   bool
@@ -255,19 +343,13 @@ func NewConnection(ctx context.Context, dbName string, cluster []string, logger 
 func (dx *DBX) Close() error {
 	dbxMu.Lock()
 	defer dbxMu.Unlock()
-	/*
-		dx.users--
-		if dx.users > 0 {
-			return nil
-		}
-	*/
 	delete(dbxDB, dx.name)
 	return dx.db.Close()
 }
 
 // QueryRows returns the rows of a query
 func (dx *DBX) QueryRows(query string, args ...interface{}) ([]Rows, error) {
-	if dbxDisabled {
+	if DatabaseDisabled() {
 		return nil, ErrDatabaseUnavailable
 	}
 	log.Printf("QUERY: %s ARGS: %v\n", query, args)
@@ -289,10 +371,9 @@ func (dx *DBX) QueryRows(query string, args ...interface{}) ([]Rows, error) {
 		return nil, errors.Wrap(err, "column types fail")
 	}
 	for i, colType := range colTypes {
-		fmt.Printf("COL TYPES (%d): %q SCAN: %v\n", i, colType.DatabaseTypeName(), colType.ScanType())
+		//fmt.Printf("COL TYPES (%d): %q SCAN: %v\n", i, colType.DatabaseTypeName(), colType.ScanType())
 		resp.Types[i] = colType.DatabaseTypeName()
 	}
-	fmt.Printf("\nRESP TYPES: %v\n\n", resp.Types)
 	// TODO: add support for NextResultSet()
 	for rows.Next() {
 		// TODO: optimize by scanning directly into new resp.Rows
@@ -350,9 +431,9 @@ type DBServer interface {
 // Execute will execute a series of statements, exec and query
 // TODO: consolidate with Batch?
 func (dx *DBX) Execute(statements ...string) (*ExecuteResponse, error) {
-	dx.mu.Lock()
-	defer dx.mu.Unlock()
-
+	if DatabaseDisabled() {
+		return nil, ErrDatabaseUnavailable
+	}
 	started := time.Now()
 	results := make([]Result, 0, len(statements))
 
@@ -375,7 +456,44 @@ func (dx *DBX) Execute(statements ...string) (*ExecuteResponse, error) {
 	return &ExecuteResponse{Results: results, Time: delta}, nil
 }
 
+type FileSaver func(files ...client.File) error
+
+func FileWriter(files ...client.File) error {
+	for _, file := range files {
+		f, err := os.Create(file.Name)
+		if err != nil {
+			return errors.Wrapf(err, "create failed for file: %s", file.Name)
+		}
+		defer f.Close()
+		if _, err = f.Write(file.Data); err != nil {
+			return errors.Wrap(err, "write failed")
+		}
+	}
+	return nil
+}
+
+// dbDumper is a generic database dump handler
+func dbDumper(ctx context.Context, fs FileSaver, dbname string, cluster []string) error {
+	client, err := getLeader(ctx, cluster)
+	if err != nil {
+		return errors.Wrap(err, "can't get leader")
+	}
+	files, err := client.Dump(ctx, dbname)
+	if err != nil {
+		return errors.Wrap(err, "client dump failed")
+	}
+	if err := fs(files...); err != nil {
+		return errors.Wrap(err, "database dump failed")
+	}
+	log.Println("dump complete:", dbname)
+	return nil
+}
+
 func dbDump(ctx context.Context, dbname string, cluster []string) error {
+	return dbDumper(ctx, FileWriter, dbname, cluster)
+}
+
+func _dbDump(ctx context.Context, dbname string, cluster []string) error {
 	client, err := getLeader(ctx, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't get leader")
@@ -474,8 +592,6 @@ func (dx *DBX) loadFile(fileName string, batched bool) error {
 }
 
 func (dx *DBX) queryFile(fileName string) error {
-	dx.mu.Lock()
-	defer dx.mu.Unlock()
 	buffer, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		return errors.Wrapf(err, "error reading file: %s", fileName)

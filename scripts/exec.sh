@@ -3,6 +3,7 @@
 # if we're already in docker than lets skip the docker exec
 
 if [[ -f /.dockerenv ]]; then
+   echo "running inside docker" >&2
    "$@"
    exit
 fi
@@ -23,7 +24,8 @@ dockerish() {
 }
 
 
-dockerish $@; exit
+# TODO: make this work with compose or dq instance automagically
+#dockerish $@; exit
 
 # now we're running in docker-compose
 docker-compose -p dqlited -f docker/docker-compose.yml exec bastion $@

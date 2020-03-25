@@ -28,6 +28,7 @@ const (
 	LogError = client.LogError
 )
 
+/*
 // NewLogFunc returns a LogFunc.
 func NewLogFunc(level LogLevel, prefix string, w io.Writer) LogFunc {
 	if w == nil {
@@ -43,6 +44,7 @@ func NewLogFunc(level LogLevel, prefix string, w io.Writer) LogFunc {
 		}
 	}
 }
+*/
 
 // PanicLogFunc returns a LogFunc that panics if the log message is "panic".
 func PanicLogFunc(level LogLevel, prefix string, w io.Writer) LogFunc {

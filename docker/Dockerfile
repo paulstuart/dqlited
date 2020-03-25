@@ -104,14 +104,14 @@ RUN go get -u github.com/go-delve/delve/cmd/dlv
 RUN echo "add-auto-load-safe-path /usr/local/go/src/runtime/runtime-gdb.py" >> /root/.gdbinit
 
 # upgrade vim (if we're still on Xenial
-ADD scripts/build_vim.sh /tmp
-RUN /tmp/build_vim.sh
+#ADD scripts/build_vim.sh /tmp
+#RUN /tmp/build_vim.sh
 
 # move this up once its working correctly
 RUN git clone https://github.com/fatih/vim-go.git ~/.vim/pack/plugins/start/vim-go
 
 # add the vim-go supporting binaries
-RUN vim +GoInstallBinaries +qall
+#RUN vim +GoInstallBinaries +qall
 
 # TODO: move this up to base-os
 RUN echo "alias vi='vim'" >> ~/.bash_aliases

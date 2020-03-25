@@ -13,10 +13,11 @@ var defaultLogLevel = client.LogError
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+	log.SetPrefix("BOOYAH")
 }
 
-// NewLogger returns a logging function used by dqlite
-func NewLogger(level client.LogLevel, w io.Writer) client.LogFunc {
+// NewLogFunc returns a logging function used by dqlite
+func NewLogFunc(level client.LogLevel, prefix string, w io.Writer) client.LogFunc {
 	if w == nil {
 		w = os.Stdout
 	}
@@ -25,21 +26,36 @@ func NewLogger(level client.LogLevel, w io.Writer) client.LogFunc {
 		// log levels start at 0 for Debug and increase up to Error
 		// only print logs within that limit
 		if l >= level {
-			log.Printf("HIT:: "+format, a...)
-		} else {
-			log.Printf("MISSED: "+format, a...)
+			log.Printf(prefix+format, a...)
 		}
 	}
 }
 
 // DefaultLogger returns a logger using the default settings
 func DefaultLogger(w io.Writer) client.LogFunc {
-	return NewLogger(defaultLogLevel, w)
+	return NewLogFunc(defaultLogLevel, "", w)
+	//return client.NewLogFunc(defaultLogLevel, "", w)
+}
+
+type logWriter struct{}
+
+func (l *logWriter) Write(in []byte) (int, error) {
+	log.Println(string(in))
+	return len(in), nil
+}
+
+// NewLoggingWriter returns an io.Writer using the default Go logger
+func NewLoggingWriter() io.Writer {
+	return &logWriter{}
 }
 
 func getLeader(ctx context.Context, cluster []string) (*client.Client, error) {
 	store := getStore(ctx, cluster)
-	return client.FindLeader(ctx, store, client.WithLogFunc(NewLogger(defaultLogLevel, log.Writer())))
+	//return client.FindLeader(ctx, store, client.WithLogFunc(NewLogger(defaultLogLevel, log.Writer())))
+	//logFunc := client.NewLogFunc(defaultLogLevel, "", log.Writer())
+	logFunc := NewLogFunc(defaultLogLevel, "", nil)
+	//return client.FindLeader(ctx, store, client.WithLogFunc(client.NewLogFunc(defaultLogLevel, "", log.Writer())))
+	return client.FindLeader(ctx, store, client.WithLogFunc(logFunc))
 }
 
 func getStore(ctx context.Context, cluster []string) client.NodeStore {

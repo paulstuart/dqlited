@@ -59,7 +59,15 @@ func Transfer(ctx context.Context, id uint64, cluster []string) error {
 		return err
 	}
 	defer client.Close()
-	return client.Transfer(ctx, id)
+	leader, err := client.Leader(ctx)
+	if err != nil {
+		return errors.Wrap(err, "error getting leader")
+	}
+	log.Printf("transfer leadership from:%d to:%d\n", leader.ID, id)
+	//return client.Transfer(ctx, id)
+	err = client.Transfer(ctx, id)
+	log.Printf("transferred leadership from:%d to:%d\n", leader.ID, id)
+	return err
 }
 
 // Remove removes a node from the cluster
@@ -91,6 +99,7 @@ func exists(ctx context.Context, client *dqclient.Client, id uint64, address str
 	return false
 }
 
+// statusFunc returns a function that yields cluster node status
 func statusFunc(cluster []string) func() ([]dqclient.NodeInfo, error) {
 	ctx := context.Background()
 	client, err := getLeader(ctx, cluster)
@@ -107,6 +116,7 @@ func statusFunc(cluster []string) func() ([]dqclient.NodeInfo, error) {
 	}
 }
 
+/*
 // handoff will check if we are currently the leader, and if so,
 // will transfer leadership to the first viable node found
 func handoff(client *dqclient.Client, id uint64) {
@@ -149,6 +159,7 @@ func handoff(client *dqclient.Client, id uint64) {
 	}
 	log.Printf("removed node: %d from cluster\n", id)
 }
+*/
 
 // remove <s> from <list> if it is present
 func omit(s string, list []string) []string {
@@ -387,7 +398,10 @@ func StartServer(ctx context.Context, id, port int, skip bool, dbname, dir, addr
 	} else {
 		log.Println("skipping adding server to cluster")
 	}
-	onShutdown(client, node, uint64(id))
+	// is our signal handler interferring with libuv's handling?
+	if false {
+		onShutdown(client, node, uint64(id))
+	}
 	log.Printf("setting up handlers for database: %s\n", dbname)
 	handlers, err := setupHandlers(ctx, dbname, cluster)
 	if err != nil {

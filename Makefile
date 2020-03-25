@@ -54,7 +54,7 @@ demo: kill watch start prep ## demonstrate the cluster bring up and fault tolera
 	
 # docker build targets
 
-.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest hey dangling dangle timeout tcp
+.PHONY: ubuntu debug docker dqlited-dev dqlited-prod dq dtest hey dangling dangle timeout tcp dqlited-static
 
 timeout:
 	echo 1 > /proc/sys/net/ipv4/tcp_fin_timeout
@@ -83,6 +83,8 @@ dqlited-dev: # builds upon ubuntu-dev
 dqlited-prod: # builds upon ubuntu-dev (for now, will use ubuntu-base once ready)
 	@$(DOCKER) --target dqlited-prod  -t paulstuart/dqlite-prod:$(RELEASE) .
 
+dqlited-static: # builds upon ubuntu-dev (for now, will use ubuntu-base once ready)
+	@$(DOCKER) -t paulstuart/dqlite-prod:$(RELEASE) .
 #debug:
 #	@docker build --no-cache -t paulstuart/dqlite-debug:$(RELEASE) .
 
@@ -201,7 +203,7 @@ run-ubuntu:
 run:
 	docker run \
 		-it --rm \
-		-p 4001:4001 \
+		-p 9001:9001 \
 		--workdir $(MNT) \
                 --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 						\
                 --mount type=bind,src="$(FRK)/go-dqlite",dst=/root/go/src/github.com/canonical/go-dqlite 	\
@@ -254,8 +256,7 @@ udev:
 dq:
 	docker run \
 		-it --rm \
-		-p 4001:4001 \
-		-p 6060:6060 \
+		-p 9001:9001 \
 		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
 		--privileged								\
 		--workdir $(MNT) 							\
@@ -264,7 +265,20 @@ dq:
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
 		paulstuart/dqlite-dev:$(RELEASE) bash
 
-.PHONY: comp prodtest
+.PHONY: comp prodtest orig
+
+# dev image with no forks
+orig:
+	docker run \
+		-it --rm \
+		-p 4001:4001 \
+		-p 6060:6060 \
+		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
+		paulstuart/dqlite-dev:$(RELEASE) bash
+
 # testing image used for composer
 comp:
 	docker run \

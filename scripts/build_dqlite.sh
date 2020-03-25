@@ -6,7 +6,7 @@ libuv() {
 say "building libuv"
 cd libuv
 git pull
-git checkout v1.34.1 # latest version as of now
+git checkout v1.34.2 # latest version as of now
 sh autogen.sh
 ./configure && make -j && make install
 cd -
@@ -54,8 +54,10 @@ say "building dqlite"
 cd dqlite
 git pull
 autoreconf -i
+#CFLAGS=-DDEBUG_VERBOSE=1 
 ./configure
-make -j && make install
+make clean
+make -j CFLAGS=-DDEBUG_VERBOSE=1 && make install
 cd -
 }
 

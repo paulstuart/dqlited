@@ -47,7 +47,8 @@ server_start() {
 #	echo "$(ts) waiting for close of port $PORT" >> /tmp/dqlited-demo${DQLITED_ID}.txt
 #   	sleep 1
 #   done
-   $CMD server --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID}	>> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
+   #$CMD server --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID}	>> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
+   $CMD -z debug server --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID}	>> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
    echo $! > $PIDS/$DQLITED_ID
    sleep 1 # let it start up before doing anything with it
    echo "$(ts) node:$DQLITED_ID started with pid:$!" 						>> /tmp/dqlited-demo${DQLITED_ID}.txt
@@ -57,7 +58,7 @@ server_stop() {
    DQLITED_ID=$1
    PID=$(cat $PIDS/$DQLITED_ID)
    echo "$(ts) kill server: $DQLITED_ID with pid: $PID" >> /tmp/dqlited-demo${DQLITED_ID}.txt
-   kill -SIGINT $PID && echo "killed pid $PID"
+   kill -HUP $PID && echo "killed pid $PID"
    # wait for process to terminate. TODO: use a timeout?
    tail --pid=$PID -f /dev/null
    PORT=918${DQLITED_ID}

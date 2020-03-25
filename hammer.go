@@ -78,7 +78,7 @@ func hammerExec(db *sql.DB, count int) {
 			} else {
 				// reprint on same line to make real-time viewing easier
 				if (fails % 10) == 0 {
-					fmt.Print(" pause for a second...")
+					fmt.Print(" pause for a second...\n")
 					time.Sleep(time.Second)
 				}
 				fmt.Printf("\r")
@@ -153,13 +153,16 @@ func hammerTime(db *sql.DB, count int) {
 	// get sub-second resolution
 	const timeOut = "2006/01/02 03:04:05.000000PM -0700"
 	var now string
-	var fails, good, last int
+	var fails, good, last int64
 
 	started := time.Now().Local()
 	fmt.Printf("%s starting\n", started.Format(timeOut))
 	for i := 0; i < count; i++ {
-		const insert = "insert into simple (other) values(?)"
-		resp, err := db.Exec(insert, last+1)
+		// skip param binding so we can see the values in the sql statement
+		//const insert = "insert into simple (other) values(?)"
+		//resp, err := db.Exec(insert, last+1)
+		insert := fmt.Sprintf("insert into simple (other) values(%d)", last+1)
+		resp, err := db.Exec(insert)
 		if err != nil {
 			fails++
 			// first err (in a series?)
@@ -167,14 +170,14 @@ func hammerTime(db *sql.DB, count int) {
 				now = time.Now().Format(timeOut)
 
 			}
-			fmt.Printf("%s fails: %3d (%d/%d):%T %-30s", now, fails, i, count, err, err.Error())
+			fmt.Printf("%s fails: %3d (%d/%d):%T %-30s\r", now, fails, i, count, err, err.Error())
 			continue
 		}
 		if id, err := resp.LastInsertId(); err != nil {
 			fmt.Printf("%s failed to get insert id: %+v\n", now, err)
 			continue
 		} else {
-			last = int(id)
+			last = id
 		}
 		if fails > 0 {
 			fmt.Printf("\n%s fixed: (%d/%d)\n", ts(), good, count)
