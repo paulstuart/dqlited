@@ -59,33 +59,18 @@ func NewLogLog(level client.LogLevel) client.LogFunc {
 	return NewLogFunc(level, "", NewLoggingWriter())
 }
 
-func getLeader(ctx context.Context, cluster []string) (*client.Client, error) {
+func getLeader(ctx context.Context, pair *KeyPair, cluster []string) (*client.Client, error) {
 	store := getStore(ctx, cluster)
-	//return client.FindLeader(ctx, store, client.WithLogFunc(NewLogger(defaultLogLevel, log.Writer())))
-	//logFunc := client.NewLogFunc(defaultLogLevel, "", log.Writer())
 	logFunc := NewLogFunc(defaultLogLevel, "", nil)
-	//return client.FindLeader(ctx, store, client.WithLogFunc(client.NewLogFunc(defaultLogLevel, "", log.Writer())))
 
 	dial := client.DefaultDialFunc
-	/*
-				crt := "cert.pem"
-				key := "key.pem"
-			crt := "certs/server.pem"
-			key := "certs/server.key"
-		crt := "server.crt"
-		key := "server.key"
-	*/
-	crt := "cluster.crt"
-	key := "cluster.key"
 	log.Println("get leader")
-	if crt != "" {
-		cert, err := tls.LoadX509KeyPair(crt, key)
+	if pair != nil && pair.Cert != "" {
+		cert, err := tls.LoadX509KeyPair(pair.Cert, pair.Key)
 		if err != nil {
 			return nil, err
 		}
-		/*
-		 */
-		data, err := ioutil.ReadFile(crt)
+		data, err := ioutil.ReadFile(pair.Cert)
 		if err != nil {
 			return nil, err
 		}
@@ -99,11 +84,6 @@ func getLeader(ctx context.Context, cluster []string) (*client.Client, error) {
 		dial = client.DialFuncWithTLS(dial, config)
 		log.Println("using TLS encryption")
 
-		//listen, dial := app.SimpleTLSConfig(cert, pool)
-		/*
-			listen := app.SimpleListenTLSConfig(cert, pool)
-		*/
-		//options = append(options, app.WithTLS(listen, dial))
 	}
 
 	return client.FindLeader(ctx, store, client.WithLogFunc(logFunc), client.WithDialFunc(dial))

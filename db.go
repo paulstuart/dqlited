@@ -221,8 +221,8 @@ func queryColumn(db *sql.DB, statement string, args ...interface{}) (string, err
 }
 
 // run a single command and print its results
-func dbCmd(ctx context.Context, dbName string, cluster []string, logger client.LogFunc, header, divs bool, statement string) error {
-	dx, err := NewConnection(ctx, dbName, cluster, logger)
+func dbCmd(ctx context.Context, kp *KeyPair, dbName string, cluster []string, logger client.LogFunc, header, divs bool, statement string) error {
+	dx, err := NewConnection(ctx, kp, dbName, cluster, logger)
 	if err != nil {
 		return err
 	}
@@ -232,7 +232,7 @@ func dbCmd(ctx context.Context, dbName string, cluster []string, logger client.L
 	return dx.Eval(statement)
 }
 
-func getDB(ctx context.Context, dbName string, cluster []string, logger client.LogFunc) (*sql.DB, error) {
+func getDB(ctx context.Context, pair *KeyPair, dbName string, cluster []string, logger client.LogFunc) (*sql.DB, error) {
 	dbxMu.Lock()
 	defer dbxMu.Unlock()
 	if db, ok := dbxDB[dbName]; ok {
@@ -245,8 +245,8 @@ func getDB(ctx context.Context, dbName string, cluster []string, logger client.L
 		}
 		dial := client.DefaultDialFunc
 		opts := []driver.Option{driver.WithLogFunc(logger)}
-		pair := globalKeys
-		if pair.Cert != "" {
+		//pair := globalKeys
+		if pair != nil && pair.Cert != "" {
 			cert, err := tls.LoadX509KeyPair(pair.Cert, pair.Key)
 			if err != nil {
 				return nil, err
@@ -261,20 +261,9 @@ func getDB(ctx context.Context, dbName string, cluster []string, logger client.L
 			if !pool.AppendCertsFromPEM(data) {
 				return nil, fmt.Errorf("bad certificate")
 			}
-			/*
-				dial := app.SimpleDialTLSConfig(cert, pool)
-				dial = client.DialFuncWithTLS(dial, config)
-			*/
 			config := app.SimpleDialTLSConfig(cert, pool)
 			dial = client.DialFuncWithTLS(dial, config)
-			//listen, dial := app.SimpleTLSConfig(cert, pool)
-			/*
-				config := app.SimpleDialTLSConfig(cert, pool)
-				listen := app.SimpleListenTLSConfig(cert, pool)
-				dial = client.DialFuncWithTLS(dial, config)
-			*/
-			//options = append(options, )
-
+			log.Println("connecting with TLS")
 		}
 		opts = append(opts, driver.WithDialFunc(dial))
 
@@ -375,8 +364,8 @@ type DBX struct {
 }
 
 // NewConnection return a db connection
-func NewConnection(ctx context.Context, dbName string, cluster []string, logger LogFunc) (*DBX, error) {
-	db, err := getDB(ctx, dbName, cluster, logger)
+func NewConnection(ctx context.Context, kp *KeyPair, dbName string, cluster []string, logger LogFunc) (*DBX, error) {
+	db, err := getDB(ctx, kp, dbName, cluster, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -532,8 +521,10 @@ func MakeExec(db *sql.DB, verbose bool) DBFunc {
 	}
 }
 
+// FileSaver is a function that persist the given files
 type FileSaver func(files ...client.File) error
 
+// FileWriter is a FileSaver
 func FileWriter(files ...client.File) error {
 	for _, file := range files {
 		f, err := os.Create(file.Name)
@@ -549,8 +540,8 @@ func FileWriter(files ...client.File) error {
 }
 
 // dbDumper is a generic database dump handler
-func dbDumper(ctx context.Context, fs FileSaver, dbname string, cluster []string) error {
-	client, err := getLeader(ctx, cluster)
+func dbDumper(ctx context.Context, pair *KeyPair, fs FileSaver, dbname string, cluster []string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't get leader")
 	}
@@ -565,12 +556,12 @@ func dbDumper(ctx context.Context, fs FileSaver, dbname string, cluster []string
 	return nil
 }
 
-func dbDump(ctx context.Context, dbname string, cluster []string) error {
-	return dbDumper(ctx, FileWriter, dbname, cluster)
+func dbDump(ctx context.Context, pair *KeyPair, dbname string, cluster []string) error {
+	return dbDumper(ctx, pair, FileWriter, dbname, cluster)
 }
 
-func _dbDump(ctx context.Context, dbname string, cluster []string) error {
-	client, err := getLeader(ctx, cluster)
+func _dbDump(ctx context.Context, pair *KeyPair, dbname string, cluster []string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't get leader")
 	}
@@ -594,8 +585,8 @@ func _dbDump(ctx context.Context, dbname string, cluster []string) error {
 }
 
 // for one-shot file loads
-func dbFile(ctx context.Context, filename, dbname string, batched, verbose bool, cluster []string) error {
-	dx, err := NewConnection(ctx, dbname, cluster, nil)
+func dbFile(ctx context.Context, kp *KeyPair, filename, dbname string, batched, verbose bool, cluster []string) error {
+	dx, err := NewConnection(ctx, kp, dbname, cluster, nil)
 	if err != nil {
 		return err
 	}
@@ -606,8 +597,8 @@ func dbFile(ctx context.Context, filename, dbname string, batched, verbose bool,
 }
 
 // for one-shot process file with multiple queries
-func dbReport(ctx context.Context, filename, dbname string, header, lines bool, cluster []string) error {
-	dx, err := NewConnection(ctx, dbname, cluster, nil)
+func dbReport(ctx context.Context, kp *KeyPair, filename, dbname string, header, lines bool, cluster []string) error {
+	dx, err := NewConnection(ctx, kp, dbname, cluster, nil)
 	if err != nil {
 		return err
 	}
@@ -743,16 +734,19 @@ func (dx *DBX) Batch(buffer string) error {
 	// evaluate input on a line by line basis,
 	// (though statements can be multiple lines)
 	lines := strings.Split(CleanText(buffer), "\n")
-	var trigger bool
+	var echo, trigger bool
 	var err error
 	var statement strings.Builder
 	var tx *sql.Tx
+	prompt := " => "
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		//log.Println("LINE:", line)
+		if echo {
+			log.Println(prompt, line)
+		}
 		statement.WriteString(line + "\n")
 		switch {
 		case startsWith(line, "BEGIN TRANSACTION"):
@@ -850,8 +844,6 @@ func QueryRows(ctx context.Context, db *sql.DB, query string, args ...interface{
 	}
 	// TODO: add support for NextResultSet()
 	for rows.Next() {
-		// TODO: optimize by scanning directly into new resp.Rows
-		//buffer := make([]string, len(resp.Columns))
 		buffer := make([]interface{}, len(resp.Columns))
 		scanTo := make([]interface{}, len(buffer))
 		for i := range buffer {
@@ -894,93 +886,3 @@ func ExecuteContext(ctx context.Context, db *sql.DB, statements ...string) (*Exe
 	delta := time.Now().Sub(started).Seconds()
 	return &ExecuteResponse{Results: results, Time: delta}, nil
 }
-
-// Batch emulates the client reading a series of commands,
-// primarily those created from dumping from sqlite.
-//
-// Input is as a string (instead of a Reaader) to allow for easy
-// regexp across multiple lines. For
-//
-// Normally statements are terminated by ";" but this is complicated
-// by trigger statements which include one or more statements with
-// their own ";" occurances between the BEGIN and END
-/*
-func Batch(ctx context.Context, db *sql.DB, buffer string, w io.Writer, verbose bool) error {
-	if w == nil {
-		w = os.Stdout
-	}
-	// evaluate input on a line by line basis,
-	// (though statements can be multiple lines)
-	lines := strings.Split(CleanText(buffer), "\n")
-	var trigger bool
-	var err error
-	var statement strings.Builder
-	var tx *sql.Tx
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		//log.Println("LINE:", line)
-		statement.WriteString(line + "\n")
-		switch {
-		case startsWith(line, "BEGIN TRANSACTION"):
-			// skip the BEGIN line since it's implicit in the actual TX
-			statement.Reset()
-			if verbose {
-				log.Println(line)
-			}
-			tx, err = db.Begin()
-			if err != nil {
-				return errors.Wrap(err, "could not create transaction")
-			}
-			continue
-		case startsWith(line, "COMMIT;"):
-			if verbose {
-				log.Println(line)
-			}
-			if err := tx.Commit(); err != nil {
-				return errors.Wrap(err, "could not close transaction")
-			}
-			tx = nil
-			statement.Reset()
-			continue
-		case startsWith(line, "CREATE TRIGGER"):
-			if !strings.Contains(line, ";") {
-				trigger = true
-				continue
-			}
-		case startsWith(line, "END;"):
-			trigger = false
-		case trigger:
-			log.Println("IN TRIGGER")
-			continue
-		}
-		if !strings.Contains(line, ";") {
-			continue
-		}
-		stmt := statement.String()
-		switch {
-		case startsWith(stmt, "SELECT"):
-			dx.query(stmt)
-		case tx != nil:
-			if dx.verbose {
-				log.Println("TX EXEC:", stmt)
-			}
-			if _, err := tx.Exec(stmt); err != nil {
-				return err
-			}
-		default:
-			if dx.verbose {
-				log.Println("DB EXEC:", stmt)
-			}
-			if _, err := dx.exec(stmt); err != nil {
-				log.Println("EXEC ERR:", err)
-				return errors.Wrapf(err, "EXEC QUERY: %s FILE: %s", line, "mydb")
-			}
-		}
-		statement.Reset()
-	}
-	return nil
-}
-*/

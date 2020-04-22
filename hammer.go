@@ -42,10 +42,10 @@ func hammerInserts(count int) string {
 	return buf.String()
 }
 
-func hammer(id, count int, logger LogFunc, dbName string, cluster ...string) {
+func hammer(kp *KeyPair, id, count int, logger LogFunc, dbName string, cluster ...string) {
 	ctx := context.Background()
 	fmt.Println("hammer using cluster:", cluster)
-	dx, err := NewConnection(ctx, dbName, cluster, logger)
+	dx, err := NewConnection(ctx, kp, dbName, cluster, logger)
 	if err != nil {
 		log.Fatalln(err)
 	}

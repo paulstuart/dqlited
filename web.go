@@ -9,7 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"path"
 	"strings"
 	"time"
@@ -85,6 +85,11 @@ func webServer(port int, handlers ...WebHandler) {
 
 func webHandlers(ctx context.Context, dq *app.App) []WebHandler {
 	return []WebHandler{
+		{"/debug/pprof/", pprof.Index},
+		{"/debug/pprof/cmdline", pprof.Cmdline},
+		{"/debug/pprof/profile", pprof.Profile},
+		{"/debug/pprof/symbol", pprof.Symbol},
+		{"/debug/pprof/trace", pprof.Trace},
 		{"/db/execute/", makeHandleExec(ctx, dq)},
 		{"/db/query/", makeHandleQuery(ctx, dq)},
 		{"/status", makeHandleStatus(dq)},
@@ -144,8 +149,6 @@ func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
 	}
 }
 
-//func makeHandleExec(exec Executor) http.HandlerFunc {
-//func makeHandleExec(ctx context.Context, dq *app.App, dbname string) http.HandlerFunc {
 func makeHandleExec(ctx context.Context, dq *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -169,7 +172,6 @@ func makeHandleExec(ctx context.Context, dq *app.App) http.HandlerFunc {
 		if err != nil {
 			log.Printf("error opening db: %q -- %v\n", dbname, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			//w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		defer db.Close()

@@ -12,10 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"sort"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -44,8 +42,8 @@ var (
 )
 
 // Assign sets a new role for a node
-func Assign(ctx context.Context, id uint64, role dqclient.NodeRole, cluster []string) error {
-	client, err := getLeader(ctx, cluster)
+func Assign(ctx context.Context, pair *KeyPair, id uint64, role dqclient.NodeRole, cluster []string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return err
 	}
@@ -54,8 +52,8 @@ func Assign(ctx context.Context, id uint64, role dqclient.NodeRole, cluster []st
 }
 
 // LeaderID returns the id of the leader node, or 0 if unknown
-func LeaderID(ctx context.Context, cluster []string) (uint64, error) {
-	client, err := getLeader(ctx, cluster)
+func LeaderID(ctx context.Context, pair *KeyPair, cluster []string) (uint64, error) {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return 0, errors.Wrap(err, "error getting client")
 	}
@@ -68,8 +66,8 @@ func LeaderID(ctx context.Context, cluster []string) (uint64, error) {
 }
 
 // Transfer tries to transfer leadership to a new role
-func Transfer(ctx context.Context, id uint64, cluster []string) error {
-	client, err := getLeader(ctx, cluster)
+func Transfer(ctx context.Context, pair *KeyPair, id uint64, cluster []string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return err
 	}
@@ -86,8 +84,8 @@ func Transfer(ctx context.Context, id uint64, cluster []string) error {
 }
 
 // Remove removes a node from the cluster
-func Remove(ctx context.Context, id uint64, cluster []string) error {
-	client, err := getLeader(ctx, cluster)
+func Remove(ctx context.Context, pair *KeyPair, id uint64, cluster []string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return err
 	}
@@ -115,9 +113,9 @@ func exists(ctx context.Context, client *dqclient.Client, id uint64, address str
 }
 
 // statusFunc returns a function that yields cluster node status
-func statusFunc(cluster []string) func() ([]dqclient.NodeInfo, error) {
+func statusFunc(pair *KeyPair, cluster []string) func() ([]dqclient.NodeInfo, error) {
 	ctx := context.Background()
-	client, err := getLeader(ctx, cluster)
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		log.Fatalln("can't connect to cluster leader:", err)
 	}
@@ -129,49 +127,6 @@ func statusFunc(cluster []string) func() ([]dqclient.NodeInfo, error) {
 		}
 		return nodes, nil
 	}
-}
-
-// handoff will check if we are currently the leader, and if so,
-// will transfer leadership to the first viable node found
-func handoff(client *dqclient.Client, id uint64) {
-	timeout := time.Second * 2 // TODO: make configurable
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	if true {
-		leader, err := client.Leader(ctx)
-		if err != nil {
-			log.Println("handoff can't get leader:", err)
-			return
-		}
-		if leader.ID != id {
-			log.Printf("we are not the leader (it is: %d)\n", leader.ID)
-			return
-		}
-		log.Printf("we (node %d) are currently the leader\n", leader.ID)
-		nodes, err := client.Cluster(ctx)
-		if err != nil {
-			log.Println("handoff can't get cluster:", err)
-			return
-		}
-
-		for _, node := range nodes {
-			if node.ID != id && NodeRole(node.Role) == Voter {
-				err := client.Transfer(ctx, id)
-				if err == nil {
-					log.Printf("transfered leader ship from node: %d to %d\n", id, node.ID)
-					goto remove
-				}
-				log.Printf("unable to transfer leadership to node: %d -- %v\n", node.ID, err)
-			}
-		}
-		log.Println("unable to transfer leadership to any node")
-	remove:
-	}
-	if err := client.Remove(ctx, id); err != nil {
-		log.Printf("error removing node: %d -- %v\n", id, err)
-		return
-	}
-	log.Printf("removed node: %d from cluster\n", id)
 }
 
 // remove <s> from <list> if it is present
@@ -226,32 +181,6 @@ func nodeStart(ctx context.Context, id uint64, dir, address string) (*dqlite.Nod
 	return node, errors.Wrap(node.Start(), "failed to start node")
 }
 
-// onShutdown adds a signal handler to shut down node cleaning at termination
-func onShutdown(client *dqclient.Client, node *dqlite.Node, id uint64) {
-	log.Printf("registering shutdown hook for server id: %d\n", id)
-	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	go func() {
-		log.Printf("server id: %d waiting for signal\n", id)
-		bye := <-sig
-		log.Printf("server id: %d is shutting down on signal: %v\n", id, bye)
-		if err := client.Remove(context.Background(), id); err != nil {
-			log.Printf("error removing node: %d -- %v\n", id, err)
-		} else {
-			log.Printf("server id: %d removed from cluster\n", id)
-		}
-		log.Println("closing node:", id)
-		if err := node.Close(); err != nil {
-			log.Println("error closing node:", err)
-		}
-		if false {
-			debug.PrintStack()
-		}
-		log.Printf("server id: %d has shut down\n", id)
-		os.Exit(0)
-	}()
-}
-
 // NodeRole is a go-dqlite Node role (e.g., voter, stand-by, or spare)
 type NodeRole dqclient.NodeRole
 
@@ -282,8 +211,8 @@ func nodeRole(s string) (NodeRole, error) {
 
 type ClientFunc func(context.Context, *dqclient.Client) error
 
-func withClient(ctx context.Context, fn ClientFunc, cluster ...string) error {
-	client, err := getLeader(ctx, cluster)
+func withClient(ctx context.Context, pair *KeyPair, fn ClientFunc, cluster ...string) error {
+	client, err := getLeader(ctx, pair, cluster)
 	if err != nil {
 		return errors.Wrap(err, "can't connect to cluster leader")
 	}
@@ -291,8 +220,8 @@ func withClient(ctx context.Context, fn ClientFunc, cluster ...string) error {
 	return fn(ctx, client)
 }
 
-func clusterShow(ctx context.Context, cluster ...string) error {
-	return withClient(ctx, show, cluster...)
+func clusterShow(ctx context.Context, pair *KeyPair, cluster ...string) error {
+	return withClient(ctx, pair, show, cluster...)
 }
 
 func show(ctx context.Context, client *dqclient.Client) error {
@@ -358,39 +287,11 @@ func nodeAdd(ctx context.Context, client *dqclient.Client, id uint64, role NodeR
 
 const defaultNetworkLatency = 20 * time.Millisecond
 
-// listen for SIGUSR2 and dump cluster info to log
-func dumper(client *dqclient.Client) {
-	ch := make(chan os.Signal)
-	signal.Notify(ch, syscall.SIGUSR2)
-
-	go func(cc chan os.Signal) {
-		ctx := context.Background()
-		for {
-			<-cc
-			leader, err := client.Leader(ctx)
-			if err != nil {
-				log.Println("leader error:", err)
-			} else {
-				log.Println("LEADER:", leader)
-			}
-
-			nodes, err := client.Cluster(ctx)
-			if err != nil {
-				log.Println("cluster error:", err)
-				continue
-			}
-			for _, node := range nodes {
-				log.Println(node)
-			}
-		}
-	}(ch)
-}
-
 // StartServer provides a web interface to the database
 // No error to return as it's never intended to stop
 // TODO: too many args, consolidate into config struct
 // TODO: is ctx n/a here?
-func StartServer(ctx context.Context, id, port int, dir, address string, cluster []string) error {
+func StartServer(ctx context.Context, id, port int, keyPair *KeyPair, dir, address string, cluster []string) error {
 	log.Printf("starting server node:%d address:%q dir:%q ip:%s cluster:%v\n", id, address, dir, myIP(), cluster)
 
 	// TODO: do we need to set up db now?
@@ -405,15 +306,18 @@ func StartServer(ctx context.Context, id, port int, dir, address string, cluster
 
 	options := []app.Option{app.WithAddress(address), app.WithCluster(cluster), app.WithLogFunc(logfun)}
 
-	crt := "cluster.crt"
-	key := "cluster.key"
-	if crt != "" {
-		cert, err := tls.LoadX509KeyPair(crt, key)
+	/*
+		crt := "cluster.crt"
+		key := "cluster.key"
+		if crt != "" {
+	*/
+	if keyPair != nil && keyPair.Cert != "" {
+		cert, err := tls.LoadX509KeyPair(keyPair.Cert, keyPair.Key)
 		if err != nil {
 			return err
 		}
 
-		data, err := ioutil.ReadFile(crt)
+		data, err := ioutil.ReadFile(keyPair.Cert)
 		if err != nil {
 			return err
 		}

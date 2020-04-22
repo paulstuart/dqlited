@@ -124,7 +124,8 @@ func newServer() *cobra.Command {
 			//func StartServer(ctx context.Context, id int, dir, address, web string, cluster []string) error {
 			//err := StartServer(ctx, id, port, skip, dbName, dir, address, role, cluster)
 			cluster = omit(address, cluster)
-			err := StartServer(ctx, id, port, dir, address, cluster)
+			kp := &globalKeys
+			err := StartServer(ctx, id, port, kp, dir, address, cluster)
 			log.Println("server is done serving:", err)
 			return nil
 		},
@@ -156,7 +157,7 @@ func newStatus() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			return clusterShow(ctx, cluster...)
+			return clusterShow(ctx, &globalKeys, cluster...)
 		},
 	}
 	flags := cmd.Flags()
@@ -178,7 +179,7 @@ func newLeaderID() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			id, err := LeaderID(ctx, cluster)
+			id, err := LeaderID(ctx, &globalKeys, cluster)
 			fmt.Println(id)
 			return err
 		},
@@ -206,7 +207,7 @@ func newTransfer() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			if err := Transfer(ctx, id, cluster); err != nil {
+			if err := Transfer(ctx, &globalKeys, id, cluster); err != nil {
 				fmt.Printf("transfer to node: %d failed: %v\n", id, err)
 				os.Exit(1)
 			}
@@ -231,7 +232,7 @@ func newRemove() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			return Remove(ctx, uint64(id), cluster)
+			return Remove(ctx, &globalKeys, uint64(id), cluster)
 		},
 	}
 	flags := cmd.Flags()
@@ -272,7 +273,7 @@ func newAddnode() *cobra.Command {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			client, err := getLeader(ctx, cluster)
+			client, err := getLeader(ctx, &globalKeys, cluster)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -322,7 +323,7 @@ func newAssign() *cobra.Command {
 				if err != nil {
 					log.Fatalln(err)
 				}
-				if err := Assign(ctx, uint64(id), client.NodeRole(r), cluster); err != nil {
+				if err := Assign(ctx, &globalKeys, uint64(id), client.NodeRole(r), cluster); err != nil {
 					log.Fatalln(err)
 				}
 			}
@@ -349,7 +350,7 @@ func newAdhoc() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			logger := NewLogFunc(defaultLogLevel, "adhoc:: ", NewLoggingWriter())
-			err := dbCmd(ctx, dbName, cluster, logger, !headless, divs, strings.Join(args, " "))
+			err := dbCmd(ctx, &globalKeys, dbName, cluster, logger, !headless, divs, strings.Join(args, " "))
 			if err != nil {
 				cause := errors.Cause(err)
 				if sqlErr, ok := cause.(SqliteError); ok {
@@ -383,7 +384,7 @@ func newDumper() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
-			return dbDump(ctx, dbName, cluster)
+			return dbDump(ctx, &globalKeys, dbName, cluster)
 		},
 	}
 	flags := cmd.Flags()
@@ -409,7 +410,7 @@ func newLoad() *cobra.Command {
 				log.Fatal("no filename specified")
 			}
 			ctx := context.Background()
-			dbFile(ctx, fileName, dbName, batch, verbose, cluster)
+			dbFile(ctx, &globalKeys, fileName, dbName, batch, verbose, cluster)
 			return nil
 		},
 	}
@@ -436,7 +437,7 @@ func newReport() *cobra.Command {
 		Short: "Execute the queries in in the given file.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			dbReport(ctx, fileName, dbName, headers, lines, cluster)
+			dbReport(ctx, &globalKeys, fileName, dbName, headers, lines, cluster)
 			return nil
 		},
 	}
@@ -465,7 +466,7 @@ func newHammer() *cobra.Command {
 			fmt.Println("defaultLogLevel:", defaultLogLevel)
 			logger := NewLogFunc(defaultLogLevel, "hammy:: ", log.Writer())
 			logger(LogDebug, "checking hammer logger")
-			hammer(id, count, logger, dbName, cluster...)
+			hammer(&globalKeys, id, count, logger, dbName, cluster...)
 			return nil
 		},
 	}
