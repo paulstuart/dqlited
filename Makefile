@@ -8,6 +8,9 @@ VERSION = $(shell date '+%Y%m%d.%H:%M:%S') # version our executable with a times
 #RELEASE = xenial
 RELEASE = bionic
 
+export DQLITED_SHELL = paulstuart/dqlited-alpine-dev:latest
+export DQLITED_IMAGE = paulstuart/dqlited-scratch:latest
+
 IMG     = paulstuart/dqlited:$(RELEASE)
 GIT     = /root/go/src/github.com
 MNT     = $(GIT)/paulstuart/dqlited
@@ -17,13 +20,39 @@ FRK	= $(CMN)/debian/Xenial/FORK
 
 #DQLITED_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
 #COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183,dqlbox4:9184,dqlbox5:9185"
-COMPOSER_CLUSTER =? "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183"
+COMPOSER_CLUSTER = "dqlbox1:9181,dqlbox2:9182,dqlbox3:9183"
 
-COMPOSE = docker-compose -p dqlited -f docker/docker-compose.yml
+COMPOSE = docker-compose --project-directory . -p dqlited -f docker/docker-compose.yml
 
 
 help:	## this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: alpine-image alpine-run dev prod runprod src rebast scratch
+
+rebast:
+	$(COMPOSE) restart bastion
+
+src:
+	docker build -f docker/Dockerfile.src -t paulstuart/dqlite-src .
+
+alpine-image:
+	docker build -f docker/Dockerfile.alpine -t paulstuart/dqlited-alpine --target=prod .
+
+dev:
+	docker build -f docker/Dockerfile.alpine -t paulstuart/dqlited-alpine-dev --target=dev .
+
+prod:
+	docker build -f docker/Dockerfile.alpine -t paulstuart/dqlited-alpine-prod --target=prod .
+
+scratch:
+	docker build -f docker/Dockerfile.alpine -t paulstuart/dqlited-scratch .
+
+alpine-run:
+	docker run -it --rm paulstuart/dqlited-alpine bash
+
+runprod:
+	docker run -it --rm paulstuart/dqlited-alpine-prod bash
 
 vv:
 	@echo "VERSION -$(VERSION)-"
@@ -32,9 +61,26 @@ build:	fmt 	## build the server executable
 	CGO_LDFLAGS="-L/usr/local/lib -Wl,-rpath=/usr/local/lib" go build -v -tags libsqlite3 -ldflags '-X main.version=$(VERSION)'
 
 static:	## build a statically linked binary
-	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags libsqlite3 -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
+	CGO_LDFLAGS="-L/usr/local/lib -Wl,-lco,-ldqlite,-lm,-lraft,-lsqlite3,-luv" go build -tags "libsqlite3 sqlite_omit_load_extension" -ldflags '-s -w -extldflags "-static"  -X main.version=$(VERSION)'
 
-.PHONY: kill local redo depends rerun triad tz
+.PHONY: hammer
+
+hammer:
+	./scripts/exec.sh dqlited hammer
+
+.PHONY: kill local redo depends rerun triad tz usr1 usr2 stats logs
+
+logs:
+	$(COMPOSE) logs
+
+stats:
+	$(COMPOSE) stats
+
+usr1:
+	$(COMPOSE) kill -s SIGUSR1 bastion
+
+usr2:
+	$(COMPOSE) kill -s SIGUSR2 bastion
 
 tz:
 	ln -sf /usr/share/zoneinfo/US/Pacific /etc/localtime
@@ -177,7 +223,7 @@ start:
 	@scripts/start.sh
 
 status: ## show cluster status
-	@scripts/exec.sh ./dqlited status
+	@scripts/exec.sh dqlited status
 
 prep:
 	@scripts/prep.sh
@@ -257,13 +303,30 @@ dq:
 	docker run \
 		-it --rm \
 		-p 9001:9001 \
-		-e DQLITED_CLUSTER=$(DOCKER_CLUSTER)					\
+		-p 6060:6060 \
+		-e DQLITED_CLUSTER=$(COMPOSER_CLUSTER)					\
+		-e PATH=$(MNT):$$PATH							\
 		--privileged								\
 		--workdir $(MNT) 							\
                 --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 			\
                 --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 		\
                 --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
-		paulstuart/dqlite-dev:$(RELEASE) bash
+		--network dqlite-network						\
+		paulstuart/dqlited-alpine-dev bash
+
+# same as dq but no ports published
+dqx:
+	docker run \
+		-it --rm \
+		-e DQLITED_CLUSTER=$(COMPOSER_CLUSTER)					\
+		-e PATH=$(MNT):$$PATH							\
+		--privileged								\
+		--workdir $(MNT) 							\
+                --mount type=bind,src="$(DQL)",dst=/opt/build/dqlite 			\
+                --mount type=bind,src="$(PWD)/../FORK/go-dqlite",dst=$(MASTER) 		\
+                --mount type=bind,src="$(PWD)",dst=$(MNT) 				\
+		--network dqlite-network						\
+		paulstuart/dqlited-alpine-dev bash
 
 .PHONY: comp prodtest orig
 
@@ -297,7 +360,7 @@ prodtest:
 		--workdir $(MNT) 							\
 		paulstuart/dqlite-prod:$(RELEASE) bash
 
-dqx:
+dqxXX:
 	docker run \
 		-it --rm \
 		-p 4001:4001 \

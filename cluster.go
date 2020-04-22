@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,8 +20,10 @@ import (
 	"time"
 
 	dqlite "github.com/canonical/go-dqlite"
+	app "github.com/canonical/go-dqlite/app"
 	dqclient "github.com/canonical/go-dqlite/client"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -26,6 +32,15 @@ var (
 		"127.0.0.1:9182",
 		"127.0.0.1:9183",
 	}
+)
+
+type KeyPair struct {
+	Cert, Key string
+}
+
+// TODO: this is very wrong, but it's a placeholder at least
+var (
+	globalKeys KeyPair = KeyPair{"cluster.crt", "cluster.key"}
 )
 
 // Assign sets a new role for a node
@@ -116,7 +131,6 @@ func statusFunc(cluster []string) func() ([]dqclient.NodeInfo, error) {
 	}
 }
 
-/*
 // handoff will check if we are currently the leader, and if so,
 // will transfer leadership to the first viable node found
 func handoff(client *dqclient.Client, id uint64) {
@@ -159,12 +173,12 @@ func handoff(client *dqclient.Client, id uint64) {
 	}
 	log.Printf("removed node: %d from cluster\n", id)
 }
-*/
 
 // remove <s> from <list> if it is present
 func omit(s string, list []string) []string {
 	for i, item := range list {
-		if s == item {
+		// match on port
+		if strings.TrimLeft(s, ":") == strings.TrimLeft(item, ":") {
 			return append(list[:i], list[i+1:]...)
 		}
 	}
@@ -263,6 +277,8 @@ func nodeRole(s string) (NodeRole, error) {
 	}
 	return NodeRole(255), fmt.Errorf("invalid role name: %q", s)
 }
+
+// ClientFunc is an interface to run commands from a CLI
 
 type ClientFunc func(context.Context, *dqclient.Client) error
 
@@ -373,41 +389,88 @@ func dumper(client *dqclient.Client) {
 // StartServer provides a web interface to the database
 // No error to return as it's never intended to stop
 // TODO: too many args, consolidate into config struct
-func StartServer(ctx context.Context, id, port int, skip bool, dbname, dir, address, roleName string, cluster []string) error {
-	log.Printf("starting server node:%d (%s) dir:%q ip:%s\n", id, roleName, dir, myIP())
-	role, err := nodeRole(roleName)
-	if err != nil {
-		return err
-	}
-	// don't try to connect to ourself
-	cluster = omit(address, cluster)
+// TODO: is ctx n/a here?
+func StartServer(ctx context.Context, id, port int, dir, address string, cluster []string) error {
+	log.Printf("starting server node:%d address:%q dir:%q ip:%s cluster:%v\n", id, address, dir, myIP(), cluster)
 
-	node, err := nodeStart(ctx, uint64(id), dir, address)
-	if err != nil {
-		return err
+	// TODO: do we need to set up db now?
+	dbname := ""
+	if dbname != "" {
+		dir = filepath.Join(dir, dbname)
 	}
-	client, err := getLeader(ctx, cluster)
-	if err != nil {
-		return err
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.Wrapf(err, "can't create %s", dir)
 	}
-	if !skip {
-		log.Printf("adding node:%d to cluster:%v\n", id, cluster)
-		if err := nodeAdd(ctx, client, uint64(id), role, address); err != nil {
+	logfun := NewLogLog(dqclient.LogDebug)
+
+	options := []app.Option{app.WithAddress(address), app.WithCluster(cluster), app.WithLogFunc(logfun)}
+
+	crt := "cluster.crt"
+	key := "cluster.key"
+	if crt != "" {
+		cert, err := tls.LoadX509KeyPair(crt, key)
+		if err != nil {
 			return err
 		}
-	} else {
-		log.Println("skipping adding server to cluster")
+
+		data, err := ioutil.ReadFile(crt)
+		if err != nil {
+			return err
+		}
+
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(data) {
+			return fmt.Errorf("bad certificate")
+		}
+
+		listen, dial := app.SimpleTLSConfig(cert, pool)
+		options = append(options, app.WithTLS(listen, dial))
 	}
-	// is our signal handler interferring with libuv's handling?
-	if false {
-		onShutdown(client, node, uint64(id))
-	}
-	log.Printf("setting up handlers for database: %s\n", dbname)
-	handlers, err := setupHandlers(ctx, dbname, cluster)
+	dq, err := app.New(dir, options...)
 	if err != nil {
-		panic(err)
+		return errors.Wrap(err, "no new app for you!")
 	}
-	log.Printf("starting webserver port: %d\n", port)
-	webServer(port, handlers...)
+
+	// TODO: add host option
+	web := fmt.Sprintf("0.0.0.0:%d", port)
+	m := http.NewServeMux()
+	s := http.Server{Addr: web, Handler: m}
+	for _, handler := range webHandlers(ctx, dq) {
+		m.HandleFunc(handler.Path, handler.Func)
+	}
+
+	ch := make(chan os.Signal)
+
+	m.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			fmt.Fprintln(w, "that method is the wrong one")
+			return
+		}
+		fmt.Fprintln(w, "shutting down")
+		ch <- unix.SIGQUIT
+	})
+
+	listener, err := net.Listen("tcp", web)
+	if err != nil {
+		return err
+	}
+
+	// TODO: add TLS
+	go s.Serve(listener)
+
+	signal.Notify(ch, unix.SIGPWR)
+	signal.Notify(ch, unix.SIGINT)
+	signal.Notify(ch, unix.SIGQUIT)
+	signal.Notify(ch, unix.SIGTERM)
+
+	sig := <-ch
+	log.Println("shutting down on signal:", sig)
+
+	listener.Close()
+	s.Shutdown(context.Background())
+	log.Println("clossing application")
+	dq.Close()
+	log.Println("application has shut down")
+
 	return nil
 }

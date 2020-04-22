@@ -1,6 +1,7 @@
 package main
 
 import (
+	//"context"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/canonical/go-dqlite/app"
 	"github.com/pkg/errors"
 )
 
@@ -54,7 +56,7 @@ func faviconPage() http.HandlerFunc {
 	}
 }
 
-func webServer(port int, handlers ...WebHandler) {
+func ServerHandlers(port int, handlers ...WebHandler) {
 	for _, handler := range handlers {
 		http.Handle(handler.Path, handler.Func)
 	}
@@ -68,17 +70,27 @@ func webServer(port int, handlers ...WebHandler) {
 	}
 }
 
-func setupHandlers(ctx context.Context, dbname string, cluster []string) ([]WebHandler, error) {
-	dx, err := NewConnection(ctx, dbname, cluster, nil)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to make queryer")
+func webServer(port int, handlers ...WebHandler) {
+	for _, handler := range handlers {
+		http.Handle(handler.Path, handler.Func)
 	}
+
+	httpServer := fmt.Sprintf(":%d", port)
+	log.Printf("serve up web: http://%s%s/\n", myIP(), httpServer)
+	err := ListenAndServe(httpServer, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func webHandlers(ctx context.Context, dq *app.App) []WebHandler {
 	return []WebHandler{
-		{"/db/execute", makeHandleExec(dx)},
-		{"/db/query", makeHandleQuery(dx)},
-		{"/status", makeHandleStatus(cluster)},
+		{"/db/execute/", makeHandleExec(ctx, dq)},
+		{"/db/query/", makeHandleQuery(ctx, dq)},
+		{"/status", makeHandleStatus(dq)},
+		{"/favicon.ico", faviconPage()},
 		{"/", homePage},
-	}, nil
+	}
 }
 
 func homePage(w http.ResponseWriter, r *http.Request) {
@@ -95,26 +107,30 @@ type nodeStatus struct {
 	Role    string
 }
 
-func makeHandleStatus(cluster []string) http.HandlerFunc {
-	fn := statusFunc(cluster)
+func makeHandleStatus(dq *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		nodes, err := fn()
+		leader, err := dq.Leader(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-		} else {
-			status := make([]nodeStatus, len(nodes))
-			for i, node := range nodes {
-				status[i] = nodeStatus{
-					node.ID,
-					node.Address,
-					node.Role.String(),
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			enc := json.NewEncoder(w)
-			enc.SetIndent("", "  ")
-			enc.Encode(status)
+			return
 		}
+		nodes, err := leader.Cluster(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		status := make([]nodeStatus, len(nodes))
+		for i, node := range nodes {
+			status[i] = nodeStatus{
+				node.ID,
+				node.Address,
+				node.Role.String(),
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.Encode(status)
 	}
 }
 func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
@@ -128,37 +144,88 @@ func writeResponse(w http.ResponseWriter, r *http.Request, j *ExecuteResponse) {
 	}
 }
 
-func makeHandleExec(exec Executor) http.HandlerFunc {
+//func makeHandleExec(exec Executor) http.HandlerFunc {
+//func makeHandleExec(ctx context.Context, dq *app.App, dbname string) http.HandlerFunc {
+func makeHandleExec(ctx context.Context, dq *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+
+		dbname := r.URL.Path
+		if i := strings.LastIndex(dbname, "/"); i > 0 {
+			dbname = dbname[i+1:]
+		}
+
+		// TODO: sort out who goes first
+		ctx = r.Context()
+		if dead, ok := ctx.Deadline(); ok {
+			//ctx = r.Context().WithTimeout(ctx) // inherit timeout. invert it?
+			dead = dead.Add(time.Minute)
+			fmt.Println("DBNAME:", dbname, "TIME REMAINING:", dead.Sub(time.Now()))
+		}
+		db, err := dq.Open(ctx, dbname)
+		if err != nil {
+			log.Printf("error opening db: %q -- %v\n", dbname, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			//w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer db.Close()
+
+		log.Println("OPENED DB:", dbname)
 		defer r.Body.Close()
 		var statements []string
 		if err := json.NewDecoder(r.Body).Decode(&statements); err != nil {
 			log.Printf("exec error getting queries: %v\n", err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		resp, err := exec.Execute(statements...)
+		ctx2 := r.Context()
+		if dead, ok := ctx.Deadline(); ok {
+			//ctx = r.Context().WithTimeout(ctx) // inherit timeout. invert it?
+			dead = dead.Add(time.Minute)
+			fmt.Println("TIME REMAINING:", dead.Sub(time.Now()))
+			ctx2, _ = context.WithDeadline(ctx2, dead) // inherit timeout. invert it?
+		}
+		stmts := strings.Join(statements, "\n")
+		resp, err := ExecuteContext(ctx2, db, stmts)
 		if err != nil {
 			log.Printf("error executing queries: %v\n", err)
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			//w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		writeResponse(w, r, resp)
 	}
 }
 
-func makeHandleQuery(queryor Queryor) http.HandlerFunc {
+//func makeHandleQuery(queryor Queryor) http.HandlerFunc {
+func makeHandleQuery(ctx context.Context, dq *app.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		if r.Method != "GET" && r.Method != "POST" {
 			log.Printf("invalid method: %q\n", r.Method)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+
+		dbname := r.URL.Path
+		if i := strings.LastIndex(dbname, "/"); i > 0 {
+			dbname = dbname[i+1:]
+		}
+
+		// TODO: sort out merging context cancelation/timeout
+		ctx = r.Context()
+		db, err := dq.Open(ctx, dbname)
+		if err != nil {
+			log.Printf("error opening db: %q -- %v\n", dbname, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer db.Close()
+		log.Println("OPENED DB:", dbname)
+
 		queries, err := requestQueries(r)
 		if err != nil {
 			log.Printf("error getting queries: %v\n", err)
@@ -168,10 +235,21 @@ func makeHandleQuery(queryor Queryor) http.HandlerFunc {
 		log.Printf("queries submitted: %v\n", queries)
 
 		for i, query := range queries {
-			resp, err := queryor.QueryRows(query)
+			ctx2 := r.Context()
+			if dead, ok := ctx.Deadline(); ok {
+				dead = dead.Add(time.Minute)
+				fmt.Println("TIME REMAINING:", dead.Sub(time.Now()))
+
+				ctx3, cancel := context.WithDeadline(ctx, dead) // inherit timeout. invert it?
+				defer cancel()
+				ctx2 = ctx3
+
+			}
+			resp, err := QueryRows(ctx2, db, query)
+			//resp, err := queryor.QueryRows(query.)
 			if err != nil {
 				log.Printf("error executing queries (%d/%d): %q %v\n", i+1, len(queries), query, err)
-				w.WriteHeader(http.StatusBadRequest)
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
@@ -179,6 +257,7 @@ func makeHandleQuery(queryor Queryor) http.HandlerFunc {
 				Results: resp,
 			}
 			enc := json.NewEncoder(w)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			enc.Encode(reply)
 		}
 	}
@@ -289,15 +368,6 @@ func txTimeout(req *http.Request) (time.Duration, bool, error) {
 func idleTimeout(req *http.Request) (time.Duration, bool, error) {
 	return durationParam(req, "idle_timeout")
 }
-
-/*
-func prettyEnabled(e bool) string {
-	if e {
-		return "enabled"
-	}
-	return "disabled"
-}
-*/
 
 // NormalizeAddr ensures that the given URL has a HTTP protocol prefix.
 // If none is supplied, it prefixes the URL with "http://".

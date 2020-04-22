@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"io"
@@ -15,8 +17,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	app "github.com/canonical/go-dqlite/app"
 	"github.com/canonical/go-dqlite/client"
 	"github.com/canonical/go-dqlite/driver"
+	"github.com/paulstuart/dbreaker"
 	"github.com/pkg/errors"
 )
 
@@ -28,7 +32,13 @@ var (
 
 	// ErrDatabaseUnavailable is returned if the database is unavailable
 	ErrDatabaseUnavailable = errors.New("database is unavailable")
+
+	breaker dbreaker.Downer
 )
+
+func init() {
+	breaker, _ = dbreaker.NewDriver("dbreaker", "dqlite")
+}
 
 // EnableDatabase controls the database circuit breaker
 func EnableDatabase(enable bool) {
@@ -233,8 +243,42 @@ func getDB(ctx context.Context, dbName string, cluster []string, logger client.L
 		if logger == nil {
 			logger = client.DefaultLogFunc
 		}
-		logOpt := driver.WithLogFunc(logger)
-		dbDriver, err := driver.New(store, logOpt)
+		dial := client.DefaultDialFunc
+		opts := []driver.Option{driver.WithLogFunc(logger)}
+		pair := globalKeys
+		if pair.Cert != "" {
+			cert, err := tls.LoadX509KeyPair(pair.Cert, pair.Key)
+			if err != nil {
+				return nil, err
+			}
+
+			data, err := ioutil.ReadFile(pair.Cert)
+			if err != nil {
+				return nil, err
+			}
+
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(data) {
+				return nil, fmt.Errorf("bad certificate")
+			}
+			/*
+				dial := app.SimpleDialTLSConfig(cert, pool)
+				dial = client.DialFuncWithTLS(dial, config)
+			*/
+			config := app.SimpleDialTLSConfig(cert, pool)
+			dial = client.DialFuncWithTLS(dial, config)
+			//listen, dial := app.SimpleTLSConfig(cert, pool)
+			/*
+				config := app.SimpleDialTLSConfig(cert, pool)
+				listen := app.SimpleListenTLSConfig(cert, pool)
+				dial = client.DialFuncWithTLS(dial, config)
+			*/
+			//options = append(options, )
+
+		}
+		opts = append(opts, driver.WithDialFunc(dial))
+
+		dbDriver, err := driver.New(store, opts...)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create dqlite driver")
 		}
@@ -454,6 +498,38 @@ func (dx *DBX) Execute(statements ...string) (*ExecuteResponse, error) {
 
 	delta := time.Now().Sub(started).Seconds()
 	return &ExecuteResponse{Results: results, Time: delta}, nil
+}
+
+type DBFunc func(ctx context.Context, statements ...string) (*ExecuteResponse, error)
+
+// Execute will execute a series of statements, exec and query
+// TODO: consolidate with Batch
+func MakeExec(db *sql.DB, verbose bool) DBFunc {
+	return func(ctx context.Context, statements ...string) (*ExecuteResponse, error) {
+		if DatabaseDisabled() {
+			return nil, ErrDatabaseUnavailable
+		}
+		started := time.Now()
+		results := make([]Result, 0, len(statements))
+
+		for i, statement := range statements {
+			resp, err := db.ExecContext(ctx, statement)
+			if err != nil {
+				log.Printf("EXEC FAIL FOR: %q -- %v\n", statement, err)
+				return nil, errors.Wrapf(err, "DBX.Execute fail (%d/%d): %q", i+1, len(statements), statement)
+			}
+			lastID, _ := resp.LastInsertId()
+			affected, _ := resp.RowsAffected()
+			if verbose {
+				log.Printf("EXEC OK (%d): %s\n", affected, statement)
+			}
+			result := Result{LastInsertID: lastID, RowsAffected: affected}
+			results = append(results, result)
+		}
+
+		delta := time.Now().Sub(started).Seconds()
+		return &ExecuteResponse{Results: results, Time: delta}, nil
+	}
 }
 
 type FileSaver func(files ...client.File) error
@@ -738,3 +814,173 @@ func (dx *DBX) Batch(buffer string) error {
 	}
 	return nil
 }
+
+//
+//
+// NEW CODE FOR APP CHANGES IN GO-DQLITE
+//
+//
+// QueryRows returns the rows of a query
+func QueryRows(ctx context.Context, db *sql.DB, query string, args ...interface{}) ([]Rows, error) {
+	if DatabaseDisabled() {
+		return nil, ErrDatabaseUnavailable
+	}
+	log.Printf("QUERY: %s ARGS: %v\n", query, args)
+	reply := make([]Rows, 0, 32)
+	action := strings.ToUpper(strings.Fields(query)[0])
+	if action != "SELECT" && action != "PRAGMA" {
+		return nil, fmt.Errorf("Invalid action: %q -- must use SELECT", action)
+	}
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, errors.Wrap(err, "query failed")
+	}
+	defer rows.Close()
+
+	var resp Rows
+	resp.Columns, _ = rows.Columns()
+	resp.Types = make([]string, len(resp.Columns))
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, errors.Wrap(err, "column types fail")
+	}
+	for i, colType := range colTypes {
+		//fmt.Printf("COL TYPES (%d): %q SCAN: %v\n", i, colType.DatabaseTypeName(), colType.ScanType())
+		resp.Types[i] = colType.DatabaseTypeName()
+	}
+	// TODO: add support for NextResultSet()
+	for rows.Next() {
+		// TODO: optimize by scanning directly into new resp.Rows
+		//buffer := make([]string, len(resp.Columns))
+		buffer := make([]interface{}, len(resp.Columns))
+		scanTo := make([]interface{}, len(buffer))
+		for i := range buffer {
+			scanTo[i] = &buffer[i]
+		}
+		if err := rows.Scan(scanTo...); err != nil {
+			return nil, errors.Wrap(err, "failed to scan row")
+		}
+		fmt.Printf("SCANNED: %v\n", buffer)
+		resp.Values = append(resp.Values, buffer)
+	}
+	reply = append(reply, resp)
+	return reply, nil
+}
+
+// ExecuteContext will execute a series of statements, exec and query
+// TODO: consolidate with Batch?
+func ExecuteContext(ctx context.Context, db *sql.DB, statements ...string) (*ExecuteResponse, error) {
+	if DatabaseDisabled() {
+		return nil, ErrDatabaseUnavailable
+	}
+	started := time.Now()
+	results := make([]Result, 0, len(statements))
+
+	for i, statement := range statements {
+		resp, err := db.ExecContext(ctx, statement)
+		if err != nil {
+			log.Printf("EXEC FAIL FOR: %q -- %v\n", statement, err)
+			return nil, errors.Wrapf(err, "DBX.Execute fail (%d/%d): %q", i+1, len(statements), statement)
+		}
+		lastID, _ := resp.LastInsertId()
+		affected, _ := resp.RowsAffected()
+		if verbose {
+			log.Printf("EXEC OK (%d): %s\n", affected, statement)
+		}
+		result := Result{LastInsertID: lastID, RowsAffected: affected}
+		results = append(results, result)
+	}
+
+	delta := time.Now().Sub(started).Seconds()
+	return &ExecuteResponse{Results: results, Time: delta}, nil
+}
+
+// Batch emulates the client reading a series of commands,
+// primarily those created from dumping from sqlite.
+//
+// Input is as a string (instead of a Reaader) to allow for easy
+// regexp across multiple lines. For
+//
+// Normally statements are terminated by ";" but this is complicated
+// by trigger statements which include one or more statements with
+// their own ";" occurances between the BEGIN and END
+/*
+func Batch(ctx context.Context, db *sql.DB, buffer string, w io.Writer, verbose bool) error {
+	if w == nil {
+		w = os.Stdout
+	}
+	// evaluate input on a line by line basis,
+	// (though statements can be multiple lines)
+	lines := strings.Split(CleanText(buffer), "\n")
+	var trigger bool
+	var err error
+	var statement strings.Builder
+	var tx *sql.Tx
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		//log.Println("LINE:", line)
+		statement.WriteString(line + "\n")
+		switch {
+		case startsWith(line, "BEGIN TRANSACTION"):
+			// skip the BEGIN line since it's implicit in the actual TX
+			statement.Reset()
+			if verbose {
+				log.Println(line)
+			}
+			tx, err = db.Begin()
+			if err != nil {
+				return errors.Wrap(err, "could not create transaction")
+			}
+			continue
+		case startsWith(line, "COMMIT;"):
+			if verbose {
+				log.Println(line)
+			}
+			if err := tx.Commit(); err != nil {
+				return errors.Wrap(err, "could not close transaction")
+			}
+			tx = nil
+			statement.Reset()
+			continue
+		case startsWith(line, "CREATE TRIGGER"):
+			if !strings.Contains(line, ";") {
+				trigger = true
+				continue
+			}
+		case startsWith(line, "END;"):
+			trigger = false
+		case trigger:
+			log.Println("IN TRIGGER")
+			continue
+		}
+		if !strings.Contains(line, ";") {
+			continue
+		}
+		stmt := statement.String()
+		switch {
+		case startsWith(stmt, "SELECT"):
+			dx.query(stmt)
+		case tx != nil:
+			if dx.verbose {
+				log.Println("TX EXEC:", stmt)
+			}
+			if _, err := tx.Exec(stmt); err != nil {
+				return err
+			}
+		default:
+			if dx.verbose {
+				log.Println("DB EXEC:", stmt)
+			}
+			if _, err := dx.exec(stmt); err != nil {
+				log.Println("EXEC ERR:", err)
+				return errors.Wrapf(err, "EXEC QUERY: %s FILE: %s", line, "mydb")
+			}
+		}
+		statement.Reset()
+	}
+	return nil
+}
+*/

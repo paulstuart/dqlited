@@ -21,13 +21,15 @@ dockerish() {
 	awk '$1~v { print $2 }' v=${NAME})
 
     docker exec -it -w $MNT $EXEC_ID "$@"
+    exit
 }
 
 
-# TODO: make this work with compose or dq instance automagically
-#dockerish $@; exit
+# compose or docker dq instance automagically
+[[ $(docker-compose ps -q | wc -l) -eq 0 ]] && dockerish
+
+DOCKER_INSTANCE=${DOCKER_INSTANCE:-bastion}
 
 # now we're running in docker-compose
-docker-compose -p dqlited -f docker/docker-compose.yml exec bastion $@
-exit
+docker-compose -p dqlited -f docker/docker-compose.yml exec $DOCKER_INSTANCE $@
 

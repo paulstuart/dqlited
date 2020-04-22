@@ -16,11 +16,15 @@ export PATH=$PWD:$PATH
 # fail at first error
 set -e
 
+unset DQLITED_CLUSTER # TODO fix this!?
+export DQLITED_CLUSTER=127.0.0.1:9181
+
 [[ -n $DEBUG ]] && echo >&2 DQLITED_CLUSTER=$DQLITED_CLUSTER
 
 CMD=dqlited
 DIR=/tmp/dqlited
 PIDS=$DIR/pids
+
 
 # get timestamp matching Go's formatting
 ts() { date +"%Y/%m/%d %H:%M:%S.%N" |  cut -c -26; }
@@ -39,16 +43,22 @@ portwait() {
 
 [[ -d $PIDS ]] || mkdir -p  $PIDS
 
+
 server_start() {
    DQLITED_ID=$1
    rm -rf $DIR/$DQLITED_ID > /dev/null 2>&1
+   mkdir -p $DIR/$DQLITED_ID
+
    echo "$(ts) starting server ${DQLITED_ID}"  							>> /tmp/dqlited-demo${DQLITED_ID}.txt 
 #   while nc -z localhost $PORT; do   
 #	echo "$(ts) waiting for close of port $PORT" >> /tmp/dqlited-demo${DQLITED_ID}.txt
 #   	sleep 1
 #   done
    #$CMD server --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID}	>> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
-   $CMD -z debug server --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID}	>> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
+   # TODO: use different localhost ports per server
+   JOIN=""
+   [[ $DQLITE_ID -gt 1 ]] && export DQLITED_CLUSTER=127.0.0.1:9181 else unset DQLITED_CLUSTER
+   $CMD -z debug server --dir=$DIR/$DQLITED_ID --id=${DQLITED_ID} --address=127.0.0.1:918${DQLITED_ID} --port=400${DQLITED_ID} >> /tmp/dqlited-demo${DQLITED_ID}.txt 2>&1 &
    echo $! > $PIDS/$DQLITED_ID
    sleep 1 # let it start up before doing anything with it
    echo "$(ts) node:$DQLITED_ID started with pid:$!" 						>> /tmp/dqlited-demo${DQLITED_ID}.txt

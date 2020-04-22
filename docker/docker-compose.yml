@@ -1,7 +1,8 @@
 version: "3.7"
 services:
   bastion:
-    image: paulstuart/dqlite-prod:xenial
+    # note, bastion could have differebnt image if we use scratch for prod container
+    image: ${DQLITED_SHELL}
     hostname: bastion
     restart: always
     #stdin_open: true
@@ -14,11 +15,11 @@ services:
       - .:/host
 
   dqlbox1:
-    image: paulstuart/dqlite-prod:xenial
+    image: ${DQLITED_IMAGE}
     hostname: dqlbox1
     restart: always
     entrypoint:
-      - ./dqlited
+      - dqlited
       - server
       - --id
       - "1"
@@ -35,11 +36,11 @@ services:
       - .:/host
 
   dqlbox2:
-    image: paulstuart/dqlite-prod:xenial
+    image: ${DQLITED_IMAGE}
     hostname: dqlbox2
     restart: always
     entrypoint:
-      - ./dqlited
+      - dqlited
       - server
       - --id
       - "2"
@@ -58,11 +59,11 @@ services:
       - .:/host
 
   dqlbox3:
-    image: paulstuart/dqlite-prod:xenial
+    image: ${DQLITED_IMAGE}
     hostname: dqlbox3
     restart: always
     entrypoint:
-      - ./dqlited
+      - dqlited
       - server
       - --id
       - "3"

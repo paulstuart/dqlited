@@ -31,6 +31,7 @@ RUN apt-get install -y 			\
 
 # tools that are nice to have whilst logged in
 RUN apt-get install -y 	\
+	busybox-extras	\
 	curl		\
 	dnsutils 	\
 	gdb 		\
@@ -145,15 +146,17 @@ RUN scripts/build_dqlite.sh all
 
 WORKDIR /root/go/src/github.com/paulstuart
 
-RUN git clone https://github.com/paulstuart/dqlited.git
+#RUN git clone https://github.com/paulstuart/dqlited.git
 
 WORKDIR /root/go/src/github.com/paulstuart/dqlited 
 
-RUN go get -u -v ./... || :
+COPY . ./
+
+RUN go get -u -v ... || :
 
 RUN make static
 
-RUN go clean -i
+#RUN go clean -i
 
 RUN echo "export PATH=$PWD:\$PATH" >> ~/.bashrc
 
@@ -166,13 +169,16 @@ RUN echo "export PATH=$PWD:\$PATH" >> ~/.bashrc
 # whilst testing
 FROM dqlited-dev as dqlited-prod
 
-RUN scripts/sources.sh .
+#RUN scripts/sources.sh .
 
 WORKDIR /root/go/src/github.com/paulstuart/dqlited/
 
 #TESTING
-RUN  rm -f *.go
-COPY . /root/go/src/github.com/paulstuart/dqlited/
+RUN  rm -rf *
+COPY . ./
+#COPY *.go /root/go/src/github.com/paulstuart/dqlited/
+
+COPY . ./
 
 #TESTING
 RUN make static

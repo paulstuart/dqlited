@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 
+	app "github.com/canonical/go-dqlite/app"
 	"github.com/canonical/go-dqlite/client"
 )
 
@@ -13,7 +18,6 @@ var defaultLogLevel = client.LogError
 
 func init() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
-	log.SetPrefix("BOOYAH")
 }
 
 // NewLogFunc returns a logging function used by dqlite
@@ -21,7 +25,7 @@ func NewLogFunc(level client.LogLevel, prefix string, w io.Writer) client.LogFun
 	if w == nil {
 		w = os.Stdout
 	}
-	log.Println("making NewLogger with level:", level)
+	//log.Println("making NewLogger with level:", level)
 	return func(l client.LogLevel, format string, a ...interface{}) {
 		// log levels start at 0 for Debug and increase up to Error
 		// only print logs within that limit
@@ -46,7 +50,13 @@ func (l *logWriter) Write(in []byte) (int, error) {
 
 // NewLoggingWriter returns an io.Writer using the default Go logger
 func NewLoggingWriter() io.Writer {
+	//return NewLogFunc(defaultLogLevel, "", w)
 	return &logWriter{}
+}
+
+// NewLogLog returns a logging function used by dqlite
+func NewLogLog(level client.LogLevel) client.LogFunc {
+	return NewLogFunc(level, "", NewLoggingWriter())
 }
 
 func getLeader(ctx context.Context, cluster []string) (*client.Client, error) {
@@ -55,7 +65,48 @@ func getLeader(ctx context.Context, cluster []string) (*client.Client, error) {
 	//logFunc := client.NewLogFunc(defaultLogLevel, "", log.Writer())
 	logFunc := NewLogFunc(defaultLogLevel, "", nil)
 	//return client.FindLeader(ctx, store, client.WithLogFunc(client.NewLogFunc(defaultLogLevel, "", log.Writer())))
-	return client.FindLeader(ctx, store, client.WithLogFunc(logFunc))
+
+	dial := client.DefaultDialFunc
+	/*
+				crt := "cert.pem"
+				key := "key.pem"
+			crt := "certs/server.pem"
+			key := "certs/server.key"
+		crt := "server.crt"
+		key := "server.key"
+	*/
+	crt := "cluster.crt"
+	key := "cluster.key"
+	log.Println("get leader")
+	if crt != "" {
+		cert, err := tls.LoadX509KeyPair(crt, key)
+		if err != nil {
+			return nil, err
+		}
+		/*
+		 */
+		data, err := ioutil.ReadFile(crt)
+		if err != nil {
+			return nil, err
+		}
+
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("bad certificate")
+		}
+
+		config := app.SimpleDialTLSConfig(cert, pool)
+		dial = client.DialFuncWithTLS(dial, config)
+		log.Println("using TLS encryption")
+
+		//listen, dial := app.SimpleTLSConfig(cert, pool)
+		/*
+			listen := app.SimpleListenTLSConfig(cert, pool)
+		*/
+		//options = append(options, app.WithTLS(listen, dial))
+	}
+
+	return client.FindLeader(ctx, store, client.WithLogFunc(logFunc), client.WithDialFunc(dial))
 }
 
 func getStore(ctx context.Context, cluster []string) client.NodeStore {
